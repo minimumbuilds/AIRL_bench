@@ -226,20 +226,20 @@
                 (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
                 "python" task-file output-dir airl-bin))
           (map-from
-            ["task-name"       task-file
-             "airl-correct"    (map-get-or airl-result "correct" false)
-             "python-correct"  (map-get-or py-result "correct" false)
-             "airl-tokens"     (+ (map-get-or airl-result "prompt-tokens" 0)
-                                  (map-get-or airl-result "completion-tokens" 0))
-             "python-tokens"   (+ (map-get-or py-result "prompt-tokens" 0)
-                                  (map-get-or py-result "completion-tokens" 0))
-             "airl-time-ms"    (map-get-or airl-result "elapsed-ms" 0)
-             "python-time-ms"  (map-get-or py-result "elapsed-ms" 0)
-             "airl-chars"      (map-get-or airl-result "code-chars" 0)
-             "python-chars"    (map-get-or py-result "code-chars" 0)
-             "output-match"    (compare-outputs
-                                 (map-get-or airl-result "stdout" "")
-                                 (map-get-or py-result "stdout" ""))])))))
+            ["task-name"           task-file
+             "airl-correct"        (map-get-or airl-result "correct" false)
+             "python-correct"      (map-get-or py-result "correct" false)
+             "airl-prompt-tok"     (map-get-or airl-result "prompt-tokens" 0)
+             "airl-completion-tok" (map-get-or airl-result "completion-tokens" 0)
+             "py-prompt-tok"       (map-get-or py-result "prompt-tokens" 0)
+             "py-completion-tok"   (map-get-or py-result "completion-tokens" 0)
+             "airl-time-ms"        (map-get-or airl-result "elapsed-ms" 0)
+             "python-time-ms"      (map-get-or py-result "elapsed-ms" 0)
+             "airl-chars"          (map-get-or airl-result "code-chars" 0)
+             "python-chars"        (map-get-or py-result "code-chars" 0)
+             "output-match"        (compare-outputs
+                                     (map-get-or airl-result "stdout" "")
+                                     (map-get-or py-result "stdout" ""))])))))
 
 ;; ── Main execution ────────────────────────────────────────────────
 

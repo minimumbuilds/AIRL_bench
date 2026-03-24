@@ -18,8 +18,8 @@
     (str "| " (map-get-or r "task-name" "?")
          " | " (bool-str (map-get-or r "airl-correct" false))
          " | " (bool-str (map-get-or r "python-correct" false))
-         " | " (int-to-string (map-get-or r "airl-tokens" 0))
-         " | " (int-to-string (map-get-or r "python-tokens" 0))
+         " | " (int-to-string (map-get-or r "airl-completion-tok" 0))
+         " | " (int-to-string (map-get-or r "py-completion-tok" 0))
          " | " (int-to-string (map-get-or r "airl-time-ms" 0))
          " | " (int-to-string (map-get-or r "python-time-ms" 0))
          " | " (int-to-string (map-get-or r "airl-chars" 0))
@@ -34,8 +34,8 @@
   :requires [(valid results)]
   :ensures [(valid result)]
   :body
-    (let (header : String "| Task | AIRL | Python | AIRL Tokens | Py Tokens | AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n")
-         (separator : String "|------|------|--------|-------------|-----------|---------|-------|------------|----------|-------------|\n")
+    (let (header : String "| Task | AIRL | Python | AIRL gen tok | Py gen tok | AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n")
+         (separator : String "|------|------|--------|-------------|------------|---------|-------|------------|----------|-------------|\n")
          (rows : String (fold (fn [acc r] (str acc (result-row r))) "" results))
       (str header separator rows)))
 
@@ -73,17 +73,28 @@
     (let (total : i64 (length results))
          (airl-pass : i64 (count-correct results "airl-correct"))
          (py-pass : i64 (count-correct results "python-correct"))
-         (total-airl-tokens : i64 (sum-field results "airl-tokens"))
-         (total-py-tokens : i64 (sum-field results "python-tokens"))
+         (airl-prompt-total : i64 (sum-field results "airl-prompt-tok"))
+         (airl-gen-total : i64 (sum-field results "airl-completion-tok"))
+         (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
+         (py-gen-total : i64 (sum-field results "py-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
          (matches : i64 (count-matches results))
+         ;; Context overhead = prompt tokens for first task (same for all tasks)
+         ;; Generation tokens are the apples-to-apples comparison
+         (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
+         (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
       (str "## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) "\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
-           "- **Total AIRL tokens:** " (int-to-string total-airl-tokens) "\n"
-           "- **Total Python tokens:** " (int-to-string total-py-tokens) "\n"
+           "\n### Token Usage\n\n"
+           "| | AIRL | Python |\n"
+           "|---|------|--------|\n"
+           "| Context (per task) | " (int-to-string airl-ctx) " | " (int-to-string py-ctx) " |\n"
+           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |\n"
+           "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
+           "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
 
@@ -97,30 +108,35 @@
     (let (total : i64 (length results))
          (airl-pass : i64 (count-correct results "airl-correct"))
          (py-pass : i64 (count-correct results "python-correct"))
-         (total-airl-tokens : i64 (sum-field results "airl-tokens"))
-         (total-py-tokens : i64 (sum-field results "python-tokens"))
+         (airl-prompt-total : i64 (sum-field results "airl-prompt-tok"))
+         (airl-gen-total : i64 (sum-field results "airl-completion-tok"))
+         (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
+         (py-gen-total : i64 (sum-field results "py-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
          (airl-pct : i64 (if (= total 0) 0 (/ (* airl-pass 100) total)))
          (py-pct : i64 (if (= total 0) 0 (/ (* py-pass 100) total)))
          (matches : i64 (count-matches results))
+         (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
+         (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
       (str "# Benchmark Findings\n\n"
            "**Model:** " model "\n"
            "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
            "**AIRL binary:** " airl-bin "\n"
            "**Tasks:** " (int-to-string total) "\n\n"
-           "## Parameters\n\n"
-           "- Model: " model "\n"
-           "- LLM Guide: " (if guide-included "included" "not included") "\n"
-           "- Python context: standard generation prompt\n\n"
            "## Results\n\n"
            (generate-results-table results)
            "\n## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
-           "- **Total AIRL tokens:** " (int-to-string total-airl-tokens) "\n"
-           "- **Total Python tokens:** " (int-to-string total-py-tokens) "\n"
+           "\n### Token Usage\n\n"
+           "| | AIRL | Python |\n"
+           "|---|------|--------|\n"
+           "| Context (avg per task) | " (int-to-string airl-ctx) " | " (int-to-string py-ctx) " |\n"
+           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |\n"
+           "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
+           "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
 

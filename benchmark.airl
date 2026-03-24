@@ -9,7 +9,7 @@
   :sig [(args : List) (flag : String) (default : String) -> String]
   :intent "Extract a --flag value from args list, returning default if not found"
   :requires [(valid args) (not (= flag ""))]
-  :ensures [(not (= result ""))]
+  :ensures [(valid result)]
   :body
     (let (idx : i64 (find-flag-index args flag 0))
       (if (= idx -1)

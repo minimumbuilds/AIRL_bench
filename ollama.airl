@@ -70,3 +70,40 @@
     (map-from
       ["prompt_tokens"     (map-get-or response-map "prompt_eval_count" 0)
        "completion_tokens" (map-get-or response-map "eval_count" 0)]))
+
+;; ── Claude CLI backend ────────────────────────────────────────────
+
+;; Send a prompt to Claude via the claude CLI and return a response map
+(defn query-claude
+  :sig [(model : String) (prompt : String) -> Result[Map, String]]
+  :intent "Call claude -p with the given prompt and return a response map"
+  :requires [(not (= model "")) (not (= prompt ""))]
+  :ensures [(valid result)]
+  :body
+    (let (start-ms : i64 (time-now))
+      (match (shell-exec "claude" ["-p" prompt "--output-format" "text" "--model" model])
+        (Ok exec-map)
+          (let (exit-code : i64 (map-get exec-map "exit-code"))
+               (stdout : String (map-get exec-map "stdout"))
+               (elapsed : i64 (- (time-now) start-ms))
+            (if (= exit-code 0)
+              (Ok (map-from
+                ["response" stdout
+                 "prompt_eval_count" 0
+                 "eval_count" 0
+                 "total_duration" elapsed]))
+              (Err (str "claude exited with code " (int-to-string exit-code) ": " (map-get exec-map "stderr")))))
+        (Err e) (Err (str "claude exec failed: " e)))))
+
+;; ── Unified query dispatcher ──────────────────────────────────────
+
+;; Route to the appropriate backend based on backend name
+(defn query-llm
+  :sig [(backend : String) (host : String) (model : String) (prompt : String) -> Result[Map, String]]
+  :intent "Send a prompt to the configured LLM backend"
+  :requires [(not (= model "")) (not (= prompt ""))]
+  :ensures [(valid result)]
+  :body
+    (if (= backend "claude")
+      (query-claude model prompt)
+      (query-ollama host model prompt)))

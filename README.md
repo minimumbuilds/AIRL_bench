@@ -27,11 +27,24 @@ For each of 25 coding tasks, the tool:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | `qwen3-coder` | Ollama model name |
-| `--host` | `http://localhost:11434` | Ollama API host |
+| `--model` | `qwen3-coder` | Model name (Ollama model or Claude model ID) |
+| `--backend` | `ollama` | LLM backend: `ollama` or `claude` |
+| `--host` | `http://localhost:11434` | Ollama API host (ignored for claude backend) |
 | `--tasks` | `./tasks` | Directory containing task `.md` files |
 | `--output` | `./output` | Directory for generated code |
 | `--airl-bin` | `airl-driver` | Path to the AIRL binary |
+
+### Examples
+
+```bash
+# Ollama (default)
+airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl \
+  -- --model qwen3-coder --airl-bin /path/to/airl-driver
+
+# Claude via claude CLI
+airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl \
+  -- --backend claude --model claude-sonnet-4-6 --airl-bin /path/to/airl-driver
+```
 
 ## Pre-flight Checks
 

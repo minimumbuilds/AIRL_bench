@@ -37,6 +37,7 @@
   :body (map-from
           ["model"    (parse-flag args "--model"    "qwen3-coder")
            "host"     (parse-flag args "--host"     "http://localhost:11434")
+           "backend"  (parse-flag args "--backend"  "ollama")
            "tasks"    (parse-flag args "--tasks"    "./tasks")
            "output"   (parse-flag args "--output"   "./output")
            "airl-bin" (parse-flag args "--airl-bin" "airl-driver")]))
@@ -64,6 +65,30 @@
           (Err e) (do (print "ERROR: Cannot reach Ollama at:" host)
                       (print "  " e)
                       false)))
+
+(defn check-claude
+  :sig [-> Bool]
+  :intent "Verify the claude CLI is available"
+  :requires [true]
+  :ensures [(valid result)]
+  :body (match (shell-exec "claude" ["--version"])
+          (Ok _) true
+          (Err _) (do (print "ERROR: claude CLI not found. Install from https://docs.anthropic.com/claude-code")
+                      false)))
+
+(defn check-backend
+  :sig [(config : Map) -> Bool]
+  :intent "Run pre-flight checks appropriate to the configured backend"
+  :requires [(valid config)]
+  :ensures [(valid result)]
+  :body
+    (let (backend : String (map-get-or config "backend" "ollama"))
+         (airl-ok : Bool (check-airl-binary (map-get-or config "airl-bin" "airl-driver")))
+      (if (not airl-ok)
+        false
+        (if (= backend "claude")
+          (check-claude)
+          (check-ollama (map-get config "host"))))))
 
 ;; ── Run numbering ─────────────────────────────────────────────────
 
@@ -188,16 +213,17 @@
     (let (task-dir : String (map-get config "tasks"))
          (model : String (map-get config "model"))
          (host : String (map-get config "host"))
+         (backend : String (map-get-or config "backend" "ollama"))
          (output-dir : String (map-get config "output"))
          (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
          (task-spec : String (read-file (str task-dir "/" task-file)))
       (do
         (print "  Processing:" task-file)
         (let (airl-result : Map (process-language-result
-                (query-ollama host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
+                (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
                 "airl" task-file output-dir airl-bin))
              (py-result : Map (process-language-result
-                (query-ollama host model (build-python-prompt py-sys-prompt task-spec))
+                (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
                 "python" task-file output-dir airl-bin))
           (map-from
             ["task-name"       task-file
@@ -221,12 +247,10 @@
   (do
     (print "AIRL Benchmark Tool")
     (print "Model:" (map-get config "model"))
-    (print "Host:" (map-get config "host"))
+    (print "Backend:" (map-get-or config "backend" "ollama"))
     (print "Tasks:" (map-get config "tasks"))
     (print "")
-    (let (airl-ok : Bool (check-airl-binary (map-get-or config "airl-bin" "airl-driver")))
-         (ollama-ok : Bool (check-ollama (map-get config "host")))
-      (if (and airl-ok ollama-ok)
+    (if (check-backend config)
         (do
           (let (output-dir : String (map-get config "output"))
             (do
@@ -252,4 +276,4 @@
                       (print "Benchmark complete.")
                       (print "Report written to results/benchmark_report.md")
                       (print "Findings saved to" findings-path))))))))
-        (print "Aborting: pre-flight checks failed.")))))
+        (print "Aborting: pre-flight checks failed."))))

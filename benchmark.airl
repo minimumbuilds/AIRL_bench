@@ -60,8 +60,8 @@
   :intent "Verify Ollama is reachable"
   :requires [(not (= host ""))]
   :ensures [(valid result)]
-  :body (match (http-post (str host "/api/tags") "" (map-from ["Content-Type" "application/json"]))
-          (Ok _) true
+  :body (match (shell-exec "curl" ["-sf" (str host "/api/tags")])
+          (Ok m) (= (map-get m "exit-code") 0)
           (Err e) (do (print "ERROR: Cannot reach Ollama at:" host)
                       (print "  " e)
                       false)))

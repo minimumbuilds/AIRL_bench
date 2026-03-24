@@ -5,7 +5,7 @@
   :sig [(filepath : String) -> Map]
   :intent "Execute a Python file via python3, return result map with timing"
   :requires [(not (= filepath ""))]
-  :ensures [(valid result)]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (let (start : i64 (time-now))
       (let (exec-result : _ (shell-exec "python3" [filepath]))
@@ -29,7 +29,7 @@
   :sig [(airl-bin : String) (filepath : String) -> Map]
   :intent "Execute an AIRL file via the given airl binary, return result map with timing"
   :requires [(not (= filepath "")) (not (= airl-bin ""))]
-  :ensures [(valid result)]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (let (start : i64 (time-now))
       (let (exec-result : _ (shell-exec airl-bin ["run" filepath]))

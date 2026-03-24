@@ -8,8 +8,8 @@
 (defn parse-flag
   :sig [(args : List) (flag : String) (default : String) -> String]
   :intent "Extract a --flag value from args list, returning default if not found"
-  :requires [(valid args) (valid flag)]
-  :ensures [(valid result)]
+  :requires [(valid args) (not (= flag ""))]
+  :ensures [(not (= result ""))]
   :body
     (let (idx : i64 (find-flag-index args flag 0))
       (if (= idx -1)
@@ -21,8 +21,8 @@
 (defn find-flag-index
   :sig [(args : List) (flag : String) (i : i64) -> i64]
   :intent "Find index of flag in args list, -1 if not found"
-  :requires [(valid args) (>= i 0)]
-  :ensures [(>= result -1)]
+  :requires [(valid args) (>= i 0) (not (= flag ""))]
+  :ensures [(and (>= result -1) (< result (length args)))]
   :body (if (>= i (length args))
           -1
           (if (= (at args i) flag)
@@ -33,7 +33,7 @@
   :sig [(args : List) -> Map]
   :intent "Parse CLI arguments into a config map with defaults"
   :requires [(valid args)]
-  :ensures [(valid result)]
+  :ensures [(map-has result "model") (map-has result "backend") (map-has result "tasks")]
   :body (map-from
           ["model"    (parse-flag args "--model"    "qwen3-coder")
            "host"     (parse-flag args "--host"     "http://localhost:11434")
@@ -110,7 +110,7 @@
   :sig [(n : i64) -> String]
   :intent "Zero-pad a run number to 3 digits"
   :requires [(> n 0)]
-  :ensures [(valid result)]
+  :ensures [(= (length result) 3)]
   :body (if (< n 10)
           (str "00" (int-to-string n))
           (if (< n 100)
@@ -161,7 +161,7 @@
   :sig [(airl-stdout : String) (python-stdout : String) -> String]
   :intent "Compare normalized outputs, return yes/no/skip"
   :requires [(valid airl-stdout) (valid python-stdout)]
-  :ensures [(valid result)]
+  :ensures [(or (= result "yes") (or (= result "no") (= result "skip")))]
   :body
     (if (or (= airl-stdout "") (= python-stdout ""))
       "skip"
@@ -174,8 +174,8 @@
 (defn process-language-result
   :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) -> Map]
   :intent "Process an Ollama response: extract code, write file, run, return result map"
-  :requires [(valid language) (valid task-file)]
-  :ensures [(valid result)]
+  :requires [(or (= language "airl") (= language "python")) (not (= task-file ""))]
+  :ensures [(map-has result "correct") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (match response
       (Ok resp-map)
@@ -207,8 +207,8 @@
 (defn process-task
   :sig [(config : Map) (airl-sys-prompt : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (task-file : String) -> Map]
   :intent "Run one benchmark task: generate code in both languages, execute, collect results"
-  :requires [(valid config) (valid task-file)]
-  :ensures [(valid result)]
+  :requires [(map-has config "model") (map-has config "tasks") (not (= task-file ""))]
+  :ensures [(map-has result "task-name") (map-has result "airl-correct") (map-has result "python-correct") (map-has result "output-match")]
   :body
     (let (task-dir : String (map-get config "tasks"))
          (model : String (map-get config "model"))

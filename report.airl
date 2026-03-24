@@ -12,8 +12,8 @@
 (defn result-row
   :sig [(r : Map) -> String]
   :intent "Generate one markdown table row from a result map"
-  :requires [(valid r)]
-  :ensures [(valid result)]
+  :requires [(map-has r "task-name")]
+  :ensures [(starts-with result "| ")]
   :body
     (str "| " (map-get-or r "task-name" "?")
          " | " (bool-str (map-get-or r "airl-correct" false))
@@ -43,15 +43,15 @@
 (defn count-correct
   :sig [(results : List) (key : String) -> i64]
   :intent "Count how many results have the given key as true"
-  :requires [(valid results) (valid key)]
-  :ensures [(>= result 0)]
+  :requires [(valid results) (not (= key ""))]
+  :ensures [(and (>= result 0) (<= result (length results)))]
   :body (fold (fn [acc r] (+ acc (if (map-get-or r key false) 1 0))) 0 results))
 
 ;; Sum a numeric field across results
 (defn sum-field
   :sig [(results : List) (key : String) -> i64]
   :intent "Sum a numeric field across all result maps"
-  :requires [(valid results) (valid key)]
+  :requires [(valid results) (not (= key ""))]
   :ensures [(>= result 0)]
   :body (fold (fn [acc r] (+ acc (map-get-or r key 0))) 0 results))
 
@@ -60,7 +60,7 @@
   :sig [(results : List) -> i64]
   :intent "Count results where output-match is yes"
   :requires [(valid results)]
-  :ensures [(>= result 0)]
+  :ensures [(and (>= result 0) (<= result (length results)))]
   :body (fold (fn [acc r] (+ acc (if (= (map-get-or r "output-match" "—") "yes") 1 0))) 0 results))
 
 ;; Generate summary statistics

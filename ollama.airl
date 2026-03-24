@@ -7,7 +7,7 @@
   :sig [(model : String) (prompt : String) -> String]
   :intent "Build a JSON request body for the Ollama generate endpoint"
   :requires [(not (= model "")) (not (= prompt ""))]
-  :ensures [(not (= result ""))]
+  :ensures [(contains result "model") (contains result "prompt")]
   :body
     (json-stringify (map-from ["model" model "prompt" prompt "stream" false])))
 
@@ -65,7 +65,7 @@
   :sig [(response-map : Map) -> Map]
   :intent "Extract prompt and completion token counts from an Ollama response"
   :requires [(valid response-map)]
-  :ensures [(valid result)]
+  :ensures [(map-has result "prompt_tokens") (map-has result "completion_tokens")]
   :body
     (map-from
       ["prompt_tokens"     (map-get-or response-map "prompt_eval_count" 0)

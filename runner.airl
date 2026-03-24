@@ -1,0 +1,49 @@
+;; runner.airl — Execute generated code and time it
+
+;; Run a Python script and return execution results with timing
+(defn run-python
+  :sig [(filepath : String) -> Map]
+  :intent "Execute a Python file via python3, return result map with timing"
+  :requires [(not (= filepath ""))]
+  :ensures [(valid result)]
+  :body
+    (let (start : i64 (time-now))
+      (let (exec-result : _ (shell-exec "python3" [filepath]))
+        (let (elapsed : i64 (- (time-now) start))
+          (match exec-result
+            (Ok exec-map) (map-from
+              ["success"    (= (map-get exec-map "exit-code") 0)
+               "stdout"     (map-get exec-map "stdout")
+               "stderr"     (map-get exec-map "stderr")
+               "exit-code"  (map-get exec-map "exit-code")
+               "elapsed-ms" elapsed])
+            (Err e) (map-from
+              ["success"    false
+               "stdout"     ""
+               "stderr"     e
+               "exit-code"  -1
+               "elapsed-ms" elapsed]))))))
+
+;; Run an AIRL file and return execution results with timing
+(defn run-airl
+  :sig [(airl-bin : String) (filepath : String) -> Map]
+  :intent "Execute an AIRL file via the given airl binary, return result map with timing"
+  :requires [(not (= filepath "")) (not (= airl-bin ""))]
+  :ensures [(valid result)]
+  :body
+    (let (start : i64 (time-now))
+      (let (exec-result : _ (shell-exec airl-bin ["run" filepath]))
+        (let (elapsed : i64 (- (time-now) start))
+          (match exec-result
+            (Ok exec-map) (map-from
+              ["success"    (= (map-get exec-map "exit-code") 0)
+               "stdout"     (map-get exec-map "stdout")
+               "stderr"     (map-get exec-map "stderr")
+               "exit-code"  (map-get exec-map "exit-code")
+               "elapsed-ms" elapsed])
+            (Err e) (map-from
+              ["success"    false
+               "stdout"     ""
+               "stderr"     e
+               "exit-code"  -1
+               "elapsed-ms" elapsed]))))))

@@ -1,0 +1,255 @@
+;; benchmark.airl — Main entry point for AIRL AI Code Generation Benchmark
+;;
+;; Usage:
+;;   airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl -- --model qwen3-coder
+
+;; ── CLI argument parsing ──────────────────────────────────────────
+
+(defn parse-flag
+  :sig [(args : List) (flag : String) (default : String) -> String]
+  :intent "Extract a --flag value from args list, returning default if not found"
+  :requires [(valid args) (valid flag)]
+  :ensures [(valid result)]
+  :body
+    (let (idx : i64 (find-flag-index args flag 0))
+      (if (= idx -1)
+        default
+        (if (< (+ idx 1) (length args))
+          (at args (+ idx 1))
+          default))))
+
+(defn find-flag-index
+  :sig [(args : List) (flag : String) (i : i64) -> i64]
+  :intent "Find index of flag in args list, -1 if not found"
+  :requires [(valid args) (>= i 0)]
+  :ensures [(>= result -1)]
+  :body (if (>= i (length args))
+          -1
+          (if (= (at args i) flag)
+            i
+            (find-flag-index args flag (+ i 1)))))
+
+(defn parse-config
+  :sig [(args : List) -> Map]
+  :intent "Parse CLI arguments into a config map with defaults"
+  :requires [(valid args)]
+  :ensures [(valid result)]
+  :body (map-from
+          ["model"    (parse-flag args "--model"    "qwen3-coder")
+           "host"     (parse-flag args "--host"     "http://localhost:11434")
+           "tasks"    (parse-flag args "--tasks"    "./tasks")
+           "output"   (parse-flag args "--output"   "./output")
+           "airl-bin" (parse-flag args "--airl-bin" "airl-driver")]))
+
+;; ── Pre-flight checks ────────────────────────────────────────────
+
+(defn check-airl-binary
+  :sig [(airl-bin : String) -> Bool]
+  :intent "Verify the AIRL binary exists and runs"
+  :requires [(not (= airl-bin ""))]
+  :ensures [(valid result)]
+  :body (match (shell-exec airl-bin ["--version"])
+          (Ok _) true
+          (Err _) (do (print "ERROR: AIRL binary not found at:" airl-bin)
+                      (print "  Use --airl-bin /path/to/airl-driver to specify the correct path.")
+                      false)))
+
+(defn check-ollama
+  :sig [(host : String) -> Bool]
+  :intent "Verify Ollama is reachable"
+  :requires [(not (= host ""))]
+  :ensures [(valid result)]
+  :body (match (http-post (str host "/api/tags") "" (map-from ["Content-Type" "application/json"]))
+          (Ok _) true
+          (Err e) (do (print "ERROR: Cannot reach Ollama at:" host)
+                      (print "  " e)
+                      false)))
+
+;; ── Run numbering ─────────────────────────────────────────────────
+
+(defn get-next-run-number
+  :sig [-> i64]
+  :intent "Count existing findings files to determine next run number"
+  :requires [true]
+  :ensures [(>= result 1)]
+  :body
+    (match (shell-exec "ls" ["findings/"])
+      (Ok exec-map)
+        (let (listing : String (trim (map-get exec-map "stdout")))
+          (if (= listing "")
+            1
+            (+ 1 (length (filter (fn [f] (ends-with f ".md")) (split listing "\n"))))))
+      (Err _) 1))
+
+(defn pad-run-number
+  :sig [(n : i64) -> String]
+  :intent "Zero-pad a run number to 3 digits"
+  :requires [(> n 0)]
+  :ensures [(valid result)]
+  :body (if (< n 10)
+          (str "00" (int-to-string n))
+          (if (< n 100)
+            (str "0" (int-to-string n))
+            (int-to-string n))))
+
+;; ── Task file discovery ───────────────────────────────────────────
+
+(defn get-task-files
+  :sig [(task-dir : String) -> List]
+  :intent "List .md task files from the task directory"
+  :requires [(valid task-dir)]
+  :ensures [(valid result)]
+  :body (match (shell-exec "ls" [task-dir])
+          (Ok exec-map)
+            (let (raw : String (trim (map-get exec-map "stdout")))
+              (if (= raw "")
+                []
+                (filter (fn [f] (ends-with f ".md")) (split raw "\n"))))
+          (Err _) []))
+
+;; ── Prompt builders ───────────────────────────────────────────────
+
+(defn load-system-prompt
+  :sig [(path : String) -> String]
+  :intent "Load a system prompt file, returning empty string on failure"
+  :requires [(valid path)]
+  :ensures [(valid result)]
+  :body (if (file-exists? path) (read-file path) ""))
+
+(defn build-airl-prompt
+  :sig [(system-prompt : String) (llm-guide : String) (few-shot : String) (task-spec : String) -> String]
+  :intent "Combine AIRL system prompt, LLM guide, few-shot examples, and task specification"
+  :requires [(valid task-spec)]
+  :ensures [(not (= result ""))]
+  :body (str system-prompt "\n\n" llm-guide "\n\n" few-shot "\n\nTASK:\n" task-spec))
+
+(defn build-python-prompt
+  :sig [(system-prompt : String) (task-spec : String) -> String]
+  :intent "Combine Python system prompt with task specification"
+  :requires [(valid task-spec)]
+  :ensures [(not (= result ""))]
+  :body (str system-prompt "\n\nTASK:\n" task-spec))
+
+;; ── Output comparison ─────────────────────────────────────────────
+
+(defn compare-outputs
+  :sig [(airl-stdout : String) (python-stdout : String) -> String]
+  :intent "Compare normalized outputs, return yes/no/skip"
+  :requires [(valid airl-stdout) (valid python-stdout)]
+  :ensures [(valid result)]
+  :body
+    (if (or (= airl-stdout "") (= python-stdout ""))
+      "skip"
+      (if (= (trim airl-stdout) (trim python-stdout))
+        "yes"
+        "no")))
+
+;; ── Single task processing ────────────────────────────────────────
+
+(defn process-language-result
+  :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) -> Map]
+  :intent "Process an Ollama response: extract code, write file, run, return result map"
+  :requires [(valid language) (valid task-file)]
+  :ensures [(valid result)]
+  :body
+    (match response
+      (Ok resp-map)
+        (let (response-text : String (map-get-or resp-map "response" ""))
+             (code : String (extract-code response-text language))
+             (tokens : Map (get-token-counts resp-map))
+             (ext : String (if (= language "airl") ".airl" ".py"))
+             (out-path : String (str output-dir "/" language "/" task-file ext))
+          (do
+            (write-file out-path code)
+            (let (exec-result : Map (if (= language "python")
+                                      (run-python out-path)
+                                      (run-airl airl-bin out-path)))
+              (map-from
+                ["correct"            (map-get-or exec-result "success" false)
+                 "stdout"             (map-get-or exec-result "stdout" "")
+                 "elapsed-ms"         (map-get-or exec-result "elapsed-ms" 0)
+                 "prompt-tokens"      (map-get-or tokens "prompt_tokens" 0)
+                 "completion-tokens"  (map-get-or tokens "completion_tokens" 0)
+                 "code-chars"         (length code)]))))
+      (Err e)
+        (do
+          (print "    Error:" e)
+          (map-from
+            ["correct" false "stdout" "" "elapsed-ms" 0
+             "prompt-tokens" 0 "completion-tokens" 0
+             "code-chars" 0]))))
+
+(defn process-task
+  :sig [(config : Map) (airl-sys-prompt : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (task-file : String) -> Map]
+  :intent "Run one benchmark task: generate code in both languages, execute, collect results"
+  :requires [(valid config) (valid task-file)]
+  :ensures [(valid result)]
+  :body
+    (let (task-dir : String (map-get config "tasks"))
+         (model : String (map-get config "model"))
+         (host : String (map-get config "host"))
+         (output-dir : String (map-get config "output"))
+         (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
+         (task-spec : String (read-file (str task-dir "/" task-file)))
+      (do
+        (print "  Processing:" task-file)
+        (let (airl-result : Map (process-language-result
+                (query-ollama host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
+                "airl" task-file output-dir airl-bin))
+             (py-result : Map (process-language-result
+                (query-ollama host model (build-python-prompt py-sys-prompt task-spec))
+                "python" task-file output-dir airl-bin))
+          (map-from
+            ["task-name"       task-file
+             "airl-correct"    (map-get-or airl-result "correct" false)
+             "python-correct"  (map-get-or py-result "correct" false)
+             "airl-tokens"     (+ (map-get-or airl-result "prompt-tokens" 0)
+                                  (map-get-or airl-result "completion-tokens" 0))
+             "python-tokens"   (+ (map-get-or py-result "prompt-tokens" 0)
+                                  (map-get-or py-result "completion-tokens" 0))
+             "airl-time-ms"    (map-get-or airl-result "elapsed-ms" 0)
+             "python-time-ms"  (map-get-or py-result "elapsed-ms" 0)
+             "airl-chars"      (map-get-or airl-result "code-chars" 0)
+             "python-chars"    (map-get-or py-result "code-chars" 0)
+             "output-match"    (compare-outputs
+                                 (map-get-or airl-result "stdout" "")
+                                 (map-get-or py-result "stdout" ""))])))))
+
+;; ── Main execution ────────────────────────────────────────────────
+
+(let (config : Map (parse-config (get-args)))
+  (do
+    (print "AIRL Benchmark Tool")
+    (print "Model:" (map-get config "model"))
+    (print "Host:" (map-get config "host"))
+    (print "Tasks:" (map-get config "tasks"))
+    (print "")
+    (let (airl-ok : Bool (check-airl-binary (map-get-or config "airl-bin" "airl-driver")))
+         (ollama-ok : Bool (check-ollama (map-get config "host")))
+      (if (and airl-ok ollama-ok)
+        (do
+          (let (output-dir : String (map-get config "output"))
+            (do
+              (shell-exec "mkdir" ["-p" (str output-dir "/airl") (str output-dir "/python")])
+              (shell-exec "mkdir" ["-p" "results" "findings"])
+              (let (airl-sys-prompt : String (load-system-prompt "prompts/airl_system.md"))
+                   (airl-llm-guide : String (load-system-prompt "prompts/airl_llm_guide.md"))
+                   (airl-few-shot : String (load-system-prompt "prompts/airl_few_shot.md"))
+                   (py-sys-prompt : String (load-system-prompt "prompts/python_system.md"))
+                   (task-files : List (get-task-files (map-get config "tasks")))
+                (do
+                  (print "Found" (int-to-string (length task-files)) "tasks")
+                  (print "")
+                  (let (results : List (map (fn [tf] (process-task config airl-sys-prompt airl-llm-guide airl-few-shot py-sys-prompt tf)) task-files))
+                       (report : String (generate-report (map-get config "model") results))
+                       (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
+                       (run-id : String (pad-run-number (get-next-run-number)))
+                       (findings-path : String (str "findings/" run-id "_" (map-get config "model") ".md"))
+                    (do
+                      (write-file "results/benchmark_report.md" report)
+                      (write-file findings-path findings)
+                      (print "")
+                      (print "Benchmark complete.")
+                      (print "Report written to results/benchmark_report.md")
+                      (print "Findings saved to" findings-path))))))))
+        (print "Aborting: pre-flight checks failed.")))))

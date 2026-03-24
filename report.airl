@@ -1,0 +1,139 @@
+;; report.airl — Generate markdown benchmark reports
+
+;; Helper: boolean to PASS/FAIL string
+(defn bool-str
+  :sig [(b : Bool) -> String]
+  :intent "Convert boolean to PASS/FAIL string"
+  :requires [(valid b)]
+  :ensures [(valid result)]
+  :body (if b "PASS" "FAIL"))
+
+;; Helper: build a single table row
+(defn result-row
+  :sig [(r : Map) -> String]
+  :intent "Generate one markdown table row from a result map"
+  :requires [(valid r)]
+  :ensures [(valid result)]
+  :body
+    (str "| " (map-get-or r "task-name" "?")
+         " | " (bool-str (map-get-or r "airl-correct" false))
+         " | " (bool-str (map-get-or r "python-correct" false))
+         " | " (int-to-string (map-get-or r "airl-tokens" 0))
+         " | " (int-to-string (map-get-or r "python-tokens" 0))
+         " | " (int-to-string (map-get-or r "airl-time-ms" 0))
+         " | " (int-to-string (map-get-or r "python-time-ms" 0))
+         " | " (int-to-string (map-get-or r "airl-chars" 0))
+         " | " (int-to-string (map-get-or r "python-chars" 0))
+         " | " (map-get-or r "output-match" "—")
+         " |\n"))
+
+;; Generate markdown results table
+(defn generate-results-table
+  :sig [(results : List) -> String]
+  :intent "Generate a markdown table of per-task benchmark results"
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body
+    (let (header : String "| Task | AIRL | Python | AIRL Tokens | Py Tokens | AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n")
+         (separator : String "|------|------|--------|-------------|-----------|---------|-------|------------|----------|-------------|\n")
+         (rows : String (fold (fn [acc r] (str acc (result-row r))) "" results))
+      (str header separator rows)))
+
+;; Count correct results for a language
+(defn count-correct
+  :sig [(results : List) (key : String) -> i64]
+  :intent "Count how many results have the given key as true"
+  :requires [(valid results) (valid key)]
+  :ensures [(>= result 0)]
+  :body (fold (fn [acc r] (+ acc (if (map-get-or r key false) 1 0))) 0 results))
+
+;; Sum a numeric field across results
+(defn sum-field
+  :sig [(results : List) (key : String) -> i64]
+  :intent "Sum a numeric field across all result maps"
+  :requires [(valid results) (valid key)]
+  :ensures [(>= result 0)]
+  :body (fold (fn [acc r] (+ acc (map-get-or r key 0))) 0 results))
+
+;; Count output matches
+(defn count-matches
+  :sig [(results : List) -> i64]
+  :intent "Count results where output-match is yes"
+  :requires [(valid results)]
+  :ensures [(>= result 0)]
+  :body (fold (fn [acc r] (+ acc (if (= (map-get-or r "output-match" "—") "yes") 1 0))) 0 results))
+
+;; Generate summary statistics
+(defn generate-summary
+  :sig [(results : List) -> String]
+  :intent "Generate aggregate statistics from benchmark results"
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body
+    (let (total : i64 (length results))
+         (airl-pass : i64 (count-correct results "airl-correct"))
+         (py-pass : i64 (count-correct results "python-correct"))
+         (total-airl-tokens : i64 (sum-field results "airl-tokens"))
+         (total-py-tokens : i64 (sum-field results "python-tokens"))
+         (total-airl-ms : i64 (sum-field results "airl-time-ms"))
+         (total-py-ms : i64 (sum-field results "python-time-ms"))
+         (matches : i64 (count-matches results))
+      (str "## Summary\n\n"
+           "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) "\n"
+           "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
+           "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
+           "- **Total AIRL tokens:** " (int-to-string total-airl-tokens) "\n"
+           "- **Total Python tokens:** " (int-to-string total-py-tokens) "\n"
+           "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
+           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
+
+;; Generate findings document
+(defn generate-findings
+  :sig [(model : String) (results : List) (guide-included : Bool) (airl-bin : String) -> String]
+  :intent "Generate a complete findings document for archiving a benchmark run"
+  :requires [(not (= model ""))]
+  :ensures [(not (= result ""))]
+  :body
+    (let (total : i64 (length results))
+         (airl-pass : i64 (count-correct results "airl-correct"))
+         (py-pass : i64 (count-correct results "python-correct"))
+         (total-airl-tokens : i64 (sum-field results "airl-tokens"))
+         (total-py-tokens : i64 (sum-field results "python-tokens"))
+         (total-airl-ms : i64 (sum-field results "airl-time-ms"))
+         (total-py-ms : i64 (sum-field results "python-time-ms"))
+         (airl-pct : i64 (if (= total 0) 0 (/ (* airl-pass 100) total)))
+         (py-pct : i64 (if (= total 0) 0 (/ (* py-pass 100) total)))
+         (matches : i64 (count-matches results))
+      (str "# Benchmark Findings\n\n"
+           "**Model:** " model "\n"
+           "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
+           "**AIRL binary:** " airl-bin "\n"
+           "**Tasks:** " (int-to-string total) "\n\n"
+           "## Parameters\n\n"
+           "- Model: " model "\n"
+           "- LLM Guide: " (if guide-included "included" "not included") "\n"
+           "- Python context: standard generation prompt\n\n"
+           "## Results\n\n"
+           (generate-results-table results)
+           "\n## Summary\n\n"
+           "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
+           "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
+           "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
+           "- **Total AIRL tokens:** " (int-to-string total-airl-tokens) "\n"
+           "- **Total Python tokens:** " (int-to-string total-py-tokens) "\n"
+           "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
+           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
+
+;; Generate full benchmark report
+(defn generate-report
+  :sig [(model : String) (results : List) -> String]
+  :intent "Generate a complete markdown benchmark report"
+  :requires [(not (= model ""))]
+  :ensures [(not (= result ""))]
+  :body
+    (str "# AIRL Benchmark Report\n\n"
+         "**Model:** " model "\n\n"
+         "## Results\n\n"
+         (generate-results-table results)
+         "\n"
+         (generate-summary results)))

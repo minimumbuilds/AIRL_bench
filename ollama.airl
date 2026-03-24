@@ -1,0 +1,72 @@
+;; ollama.airl — Ollama API client module
+;;
+;; Provides functions for interacting with the Ollama /api/generate endpoint.
+
+;; Build a JSON request body for Ollama /api/generate
+(defn build-request-body
+  :sig [(model : String) (prompt : String) -> String]
+  :intent "Build a JSON request body for the Ollama generate endpoint"
+  :requires [(not (= model "")) (not (= prompt ""))]
+  :ensures [(not (= result ""))]
+  :body
+    (json-stringify (map-from ["model" model "prompt" prompt "stream" false])))
+
+;; Send a prompt to Ollama and return the parsed response map
+(defn query-ollama
+  :sig [(host : String) (model : String) (prompt : String) -> Result[Map, String]]
+  :intent "POST a generate request to Ollama and return the parsed JSON response"
+  :requires [(not (= host "")) (not (= model ""))]
+  :ensures [(valid result)]
+  :body
+    (let (url : String (+ host "/api/generate"))
+      (let (req-body : String (build-request-body model prompt))
+        (let (headers : Map (map-from ["Content-Type" "application/json"]))
+          (match (http-post url req-body headers)
+            (Ok response-text)
+              (match (json-parse response-text)
+                (Ok parsed-map) (Ok parsed-map)
+                (Err parse-err) (Err (+ "JSON parse error: " parse-err)))
+            (Err http-err)
+              (Err (+ "HTTP error: " http-err)))))))
+
+;; Extract code from between markdown fences, or return text as-is
+(defn extract-code
+  :sig [(response-text : String) (language : String) -> String]
+  :intent "Strip markdown code fences from LLM output"
+  :requires [(valid response-text)]
+  :ensures [(valid result)]
+  :body
+    (let (fence-open : String (+ (+ "```" language) "\n"))
+      (let (open-idx : i64 (index-of response-text fence-open))
+        (if (= open-idx -1)
+          ;; No language-specific fence — try bare ```
+          (let (bare-idx : i64 (index-of response-text "```"))
+            (if (= bare-idx -1)
+              response-text
+              (let (after-open : i64 (+ bare-idx 3))
+                (let (nl-idx : i64 (index-of (substring response-text after-open (length response-text)) "\n"))
+                  (if (= nl-idx -1)
+                    response-text
+                    (let (code-start : i64 (+ after-open (+ nl-idx 1)))
+                      (let (close-idx : i64 (index-of (substring response-text code-start (length response-text)) "```"))
+                        (if (= close-idx -1)
+                          response-text
+                          (trim (substring response-text code-start (+ code-start close-idx)))))))))))
+          ;; Found language-specific fence
+          (let (code-start : i64 (+ open-idx (length fence-open)))
+            (let (rest : String (substring response-text code-start (length response-text)))
+              (let (close-idx : i64 (index-of rest "```"))
+                (if (= close-idx -1)
+                  response-text
+                  (trim (substring response-text code-start (+ code-start close-idx)))))))))))
+
+;; Extract token usage counts from Ollama response
+(defn get-token-counts
+  :sig [(response-map : Map) -> Map]
+  :intent "Extract prompt and completion token counts from an Ollama response"
+  :requires [(valid response-map)]
+  :ensures [(valid result)]
+  :body
+    (map-from
+      ["prompt_tokens"     (map-get-or response-map "prompt_eval_count" 0)
+       "completion_tokens" (map-get-or response-map "eval_count" 0)]))

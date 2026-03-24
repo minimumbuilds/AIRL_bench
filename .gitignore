@@ -1,0 +1,8 @@
+# Generated output (regenerated each benchmark run)
+output/
+
+# Compiled binary
+benchmark
+
+# Claude settings
+.claude/

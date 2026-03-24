@@ -40,7 +40,9 @@
            "backend"  (parse-flag args "--backend"  "ollama")
            "tasks"    (parse-flag args "--tasks"    "./tasks")
            "output"   (parse-flag args "--output"   "./output")
-           "airl-bin" (parse-flag args "--airl-bin" "airl-driver")]))
+           "airl-bin" (parse-flag args "--airl-bin" "airl-driver")
+           "limit"    (parse-flag args "--limit"    "0")
+           "only"     (parse-flag args "--only"     "")]))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -131,6 +133,26 @@
                 []
                 (filter (fn [f] (ends-with f ".md")) (split raw "\n"))))
           (Err _) []))
+
+;; ── Task filtering ────────────────────────────────────────────────
+
+(defn filter-tasks
+  :sig [(task-files : List) (config : Map) -> List]
+  :intent "Filter task list by --only pattern or --limit count"
+  :requires [(valid task-files)]
+  :ensures [(valid result)]
+  :body
+    (let (only : String (map-get-or config "only" ""))
+         (limit-str : String (map-get-or config "limit" "0"))
+      (let (filtered : List
+              (if (= only "")
+                task-files
+                (filter (fn [f] (contains f only)) task-files)))
+        (match (string-to-int limit-str)
+          (Ok n) (if (and (> n 0) (< n (length filtered)))
+                   (take n filtered)
+                   filtered)
+          (Err _) filtered))))
 
 ;; ── Prompt builders ───────────────────────────────────────────────
 
@@ -260,9 +282,10 @@
                    (airl-llm-guide : String (load-system-prompt "prompts/airl_llm_guide.md"))
                    (airl-few-shot : String (load-system-prompt "prompts/airl_few_shot.md"))
                    (py-sys-prompt : String (load-system-prompt "prompts/python_system.md"))
-                   (task-files : List (get-task-files (map-get config "tasks")))
+                   (all-tasks : List (get-task-files (map-get config "tasks")))
+                   (task-files : List (filter-tasks all-tasks config))
                 (do
-                  (print "Found" (int-to-string (length task-files)) "tasks")
+                  (print "Found" (int-to-string (length all-tasks)) "tasks, running" (int-to-string (length task-files)))
                   (print "")
                   (let (results : List (map (fn [tf] (process-task config airl-sys-prompt airl-llm-guide airl-few-shot py-sys-prompt tf)) task-files))
                        (report : String (generate-report (map-get config "model") results))

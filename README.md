@@ -5,11 +5,7 @@ An AI code generation benchmarking utility **written in AIRL itself**. Sends cod
 ## Quick Start
 
 ```bash
-airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl \
-  -- --model qwen3-coder \
-     --airl-bin /path/to/airl-driver \
-     --tasks ./tasks \
-     --output ./output
+./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver
 ```
 
 ## What It Measures
@@ -38,12 +34,13 @@ For each of 25 coding tasks, the tool:
 
 ```bash
 # Ollama (default)
-airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl \
-  -- --model qwen3-coder --airl-bin /path/to/airl-driver
+./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver
 
 # Claude via claude CLI
-airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl \
-  -- --backend claude --model claude-sonnet-4-6 --airl-bin /path/to/airl-driver
+./run.sh --backend claude --model claude-sonnet-4-6 --airl-bin /path/to/airl-driver
+
+# Custom task directory
+./run.sh --model qwen3.5:35b --tasks ./my-tasks --output ./my-output
 ```
 
 ## Pre-flight Checks

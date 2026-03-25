@@ -29,16 +29,16 @@ Task: Count the vowels in a string.
   :ensures [(>= result 0) (<= result (length s))]
   :body
   (let (lower : String (to-lower s))
-    (let (cs : List (chars lower))
-      (fold (fn [acc c]
-        (if (or (= c "a") (= c "e"))
+       (cs : List (chars lower))
+    (fold (fn [acc c]
+      (if (or (= c "a") (= c "e"))
+        (+ acc 1)
+        (if (or (= c "i") (= c "o"))
           (+ acc 1)
-          (if (or (= c "i") (= c "o"))
+          (if (= c "u")
             (+ acc 1)
-            (if (= c "u")
-              (+ acc 1)
-              acc))))
-        0 cs))))
+            acc))))
+      0 cs)))
 
 (print (count-vowels "hello world"))
 ```
@@ -53,19 +53,19 @@ Task: Count occurrences of each word, preserving first-occurrence order.
   :requires [(valid s)]
   :ensures [(valid result)]
   :body
-    (let (words : List (split s " "))
-      (let (state : List
-             (fold (fn [acc w]
-                     (let (counts : _ (at acc 0))
-                       (let (order : List (at acc 1))
-                         (if (map-has counts w)
-                           [(map-set counts w (+ (map-get counts w) 1)) order]
-                           [(map-set counts w 1) (append order w)]))))
-                   [(map-new) []]
-                   words))
-        (let (final-counts : _ (at state 0))
-          (let (final-order : List (at state 1))
-            (map (fn [w] [w (map-get final-counts w)]) final-order))))))
+    (let (ws : List (split s " "))
+         (state : List
+           (fold (fn [acc w]
+                   (let (counts : _ (at acc 0))
+                        (order : List (at acc 1))
+                     (if (map-has counts w)
+                       [(map-set counts w (+ (map-get counts w) 1)) order]
+                       [(map-set counts w 1) (append order w)])))
+                 [(map-new) []]
+                 ws))
+      (let (final-counts : _ (at state 0))
+           (final-order : List (at state 1))
+        (map (fn [w] [w (map-get final-counts w)]) final-order))))
 
 (print (word-frequency "one two one three two one"))
 ```
@@ -81,14 +81,14 @@ Task: Caesar cipher — shift each letter by N positions.
   :ensures [(valid result)]
   :body
   (let (lower : String "abcdefghijklmnopqrstuvwxyz")
-    (let (upper : String "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-      (let (li : i64 (index-of lower c))
-        (if (!= li -1)
-          (char-at lower (% (+ li shift) 26))
-          (let (ui : i64 (index-of upper c))
-            (if (!= ui -1)
-              (char-at upper (% (+ ui shift) 26))
-              c)))))))
+       (upper : String "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+       (li : i64 (index-of lower c))
+    (if (!= li -1)
+      (char-at lower (% (+ li shift) 26))
+      (let (ui : i64 (index-of upper c))
+        (if (!= ui -1)
+          (char-at upper (% (+ ui shift) 26))
+          c)))))
 
 (defn caesar-cipher
   :sig [(s : String) (shift : i64) -> String]
@@ -121,4 +121,21 @@ Task: Transpose a matrix (list of lists).
       (map (fn [c] (get-column matrix c)) (range 0 num-cols))))
 
 (print (transpose [[1 2] [3 4] [5 6]]))
+```
+
+## Example 6: List operations with take, drop, and concat
+
+Task: Split a list at position n, reverse each half, then concatenate.
+
+```
+(defn split-reverse-concat
+  :sig [(xs : List) (n : i64) -> List]
+  :requires [(>= n 0) (<= n (length xs))]
+  :ensures [(= (length result) (length xs))]
+  :body
+    (let (left : List (take n xs))
+         (right : List (drop n xs))
+      (concat (reverse left) (reverse right))))
+
+(print (split-reverse-concat [1 2 3 4 5 6] 3))
 ```

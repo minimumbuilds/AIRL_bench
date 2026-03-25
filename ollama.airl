@@ -18,16 +18,16 @@
   :requires [(not (= host "")) (not (= model ""))]
   :ensures [(valid result)]
   :body
-    (let (url : String (+ host "/api/generate"))
+    (let (url : String (str host "/api/generate"))
       (let (req-body : String (build-request-body model prompt))
         (let (headers : Map (map-from ["Content-Type" "application/json"]))
-          (match (http-post url req-body headers)
+          (match (http-request "POST" url req-body headers)
             (Ok response-text)
               (match (json-parse response-text)
                 (Ok parsed-map) (Ok parsed-map)
-                (Err parse-err) (Err (+ "JSON parse error: " parse-err)))
+                (Err parse-err) (Err (str "JSON parse error: " parse-err)))
             (Err http-err)
-              (Err (+ "HTTP error: " http-err)))))))
+              (Err (str "HTTP error: " http-err)))))))
 
 ;; Extract code from between markdown fences, or return text as-is
 (defn extract-code
@@ -36,7 +36,7 @@
   :requires [(valid response-text)]
   :ensures [(valid result)]
   :body
-    (let (fence-open : String (+ (+ "```" language) "\n"))
+    (let (fence-open : String (str "```" language "\n"))
       (let (open-idx : i64 (index-of response-text fence-open))
         (if (= open-idx -1)
           ;; No language-specific fence — try bare ```

@@ -1,4 +1,4 @@
-# AIRL Benchmark Tool
+# AIRL_bench
 
 An AI code generation benchmarking utility **written in AIRL itself**. Sends coding tasks to a local Ollama LLM, generates code in both Python and AIRL, executes each, tracks token usage, compares output, times execution, and produces a findings report.
 
@@ -53,13 +53,13 @@ The tool verifies before running:
 
 ```
 ├── benchmark.airl        # Main entry point
-├── ollama.airl           # Ollama API client (http-post, json-parse)
+├── ollama.airl           # Ollama API client (http-request, json-parse)
 ├── runner.airl           # Code execution with timing (shell-exec)
 ├── report.airl           # Markdown report and findings generation
 ├── prompts/
 │   ├── airl_system.md    # Condensed AIRL reference (115 lines)
 │   ├── airl_llm_guide.md # Full AIRL LLM Guide (1,250 lines)
-│   ├── airl_few_shot.md  # 5 worked examples
+│   ├── airl_few_shot.md  # 6 worked examples
 │   └── python_system.md  # Python generation prompt
 ├── tasks/                # 25 task specifications (symlink to AIRL repo)
 ├── findings/             # Archived results from each benchmark run
@@ -82,4 +82,4 @@ The tool verifies before running:
 - AIRL compiler (built from the AIRL repo with `--features jit`)
 - Ollama running locally with a coding model
 - Python 3 (for executing generated Python code)
-- The AIRL runtime builtins: `http-post`, `json-parse`, `json-stringify`, `shell-exec`, `time-now`, `getenv`, `str`, `int-to-string`, `write-file`, `file-exists?`
+- The AIRL runtime builtins: `http-request`, `json-parse`, `json-stringify`, `shell-exec`, `time-now`, `getenv`, `str`, `int-to-string`, `write-file`, `file-exists?`

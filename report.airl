@@ -119,7 +119,7 @@
          (matches : i64 (count-matches results))
          (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
          (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
-      (str "# Benchmark Findings\n\n"
+      (str "# AIRL_bench Findings\n\n"
            "**Model:** " model "\n"
            "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
            "**AIRL binary:** " airl-bin "\n"
@@ -147,7 +147,7 @@
   :requires [(not (= model ""))]
   :ensures [(not (= result ""))]
   :body
-    (str "# AIRL Benchmark Report\n\n"
+    (str "# AIRL_bench Report\n\n"
          "**Model:** " model "\n\n"
          "## Results\n\n"
          (generate-results-table results)

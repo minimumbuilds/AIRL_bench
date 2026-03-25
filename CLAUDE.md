@@ -1,4 +1,4 @@
-# AIRL_bench
+# AIRL_bench v0.1.0
 
 AI code generation benchmarking tool, written in AIRL itself.
 

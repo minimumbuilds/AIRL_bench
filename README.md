@@ -1,4 +1,4 @@
-# AIRL_bench
+# AIRL_bench v0.1.0
 
 An AI code generation benchmarking utility **written in AIRL itself**. Sends coding tasks to a local Ollama LLM, generates code in both Python and AIRL, executes each, tracks token usage, compares output, times execution, and produces a findings report.
 
@@ -29,6 +29,8 @@ For each of 25 coding tasks, the tool:
 | `--tasks` | `./tasks` | Directory containing task `.md` files |
 | `--output` | `./output` | Directory for generated code |
 | `--airl-bin` | `airl-driver` | Path to the AIRL binary |
+| `--limit` | `0` (all) | Run only the first N tasks |
+| `--only` | *(none)* | Run only tasks matching this substring |
 
 ### Examples
 
@@ -57,8 +59,8 @@ The tool verifies before running:
 ├── runner.airl           # Code execution with timing (shell-exec)
 ├── report.airl           # Markdown report and findings generation
 ├── prompts/
-│   ├── airl_system.md    # Condensed AIRL reference (115 lines)
-│   ├── airl_llm_guide.md # Full AIRL LLM Guide (1,250 lines)
+│   ├── airl_system.md    # Condensed AIRL reference
+│   ├── airl_llm_guide.md # Full AIRL LLM Guide
 │   ├── airl_few_shot.md  # 6 worked examples
 │   └── python_system.md  # Python generation prompt
 ├── tasks/                # 25 task specifications (symlink to AIRL repo)
@@ -76,6 +78,7 @@ The tool verifies before running:
 | 006 | qwen3-coder (30B) | + Guide + few-shot | 20/25 (80%) |
 | 007 | Sonnet 4.6 | Condensed ref only | 24/25 (96%) |
 | 008 | Sonnet 4.6 | + Guide + few-shot | 25/25 (100%) |
+| 014 | qwen3-coder (30B) | v0.1.0 updated prompts | 22/25 (88%) |
 
 ## Dependencies
 

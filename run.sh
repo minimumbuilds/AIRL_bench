@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the AIRL benchmark tool. All arguments are passed through.
+# AIRL_bench — run the benchmark. All arguments are passed through.
 # Usage: ./run.sh --airl-bin /path/to/airl-driver --model qwen3-coder
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -9,7 +9,8 @@
   :requires [(not (= model "")) (not (= prompt ""))]
   :ensures [(contains result "model") (contains result "prompt")]
   :body
-    (json-stringify (map-from ["model" model "prompt" prompt "stream" false])))
+    (let (req : Map (map-set (map-from ["model" model "prompt" prompt]) "stream" false))
+      (json-stringify req)))
 
 ;; Send a prompt to Ollama and return the parsed response map
 (defn query-ollama

@@ -1,4 +1,4 @@
-# AIRL_bench v0.1.0
+# AIRL_bench v0.1.0 (tested with AIRL v0.5.1)
 
 AI code generation benchmarking tool, written in AIRL itself.
 
@@ -47,7 +47,13 @@ Key patterns:
 ./run.sh --backend claude --model claude-sonnet-4-6 --airl-bin /path/to/airl-driver
 ```
 
-Flags: `--model`, `--backend` (ollama|claude), `--host`, `--tasks`, `--output`, `--airl-bin`, `--limit`, `--only`
+Flags: `--model`, `--backend` (ollama|claude), `--host`, `--tasks`, `--output`, `--airl-bin`, `--guide` (path to LLM guide), `--limit`, `--only`, `--airl-only`
+
+## v0.5.1 type checker notes
+
+- v0.5.1 added a static type checker that emits warnings for standalone `.airl` files
+- Warnings like "undefined symbol: `=`" and "if condition must be bool" are false positives when files are loaded standalone — they vanish when loaded via `--load` at runtime
+- Avoid mixed-type list literals (e.g., `["key" false]`) — use `map-set` to add non-string values to maps
 
 ## When editing .airl files
 

@@ -1,4 +1,4 @@
-;; benchmark.airl — Main entry point for AIRL AI Code Generation Benchmark
+;; benchmark.airl — Main entry point for AIRL_bench
 ;;
 ;; Usage:
 ;;   airl run --load ollama.airl --load runner.airl --load report.airl benchmark.airl -- --model qwen3-coder
@@ -202,7 +202,7 @@
     (match response
       (Ok resp-map)
         (let (response-text : String (map-get-or resp-map "response" ""))
-             (code : String (extract-code response-text language))
+             (code : String (strip-trailing-fence (extract-code response-text language)))
              (tokens : Map (get-token-counts resp-map))
              (ext : String (if (= language "airl") ".airl" ".py"))
              (out-path : String (str output-dir "/" language "/" task-file ext))
@@ -267,7 +267,7 @@
 
 (let (config : Map (parse-config (get-args)))
   (do
-    (print "AIRL Benchmark Tool")
+    (print "AIRL_bench")
     (print "Model:" (map-get config "model"))
     (print "Backend:" (map-get-or config "backend" "ollama"))
     (print "Tasks:" (map-get config "tasks"))

@@ -29,6 +29,18 @@
             (Err http-err)
               (Err (str "HTTP error: " http-err)))))))
 
+;; Strip trailing markdown fence from extracted code
+(defn strip-trailing-fence
+  :sig [(code : String) -> String]
+  :intent "Remove a trailing ``` that the LLM appended without an opening fence"
+  :requires [(valid code)]
+  :ensures [(valid result)]
+  :body
+    (let (trimmed : String (trim code))
+      (if (ends-with trimmed "```")
+        (trim (substring trimmed 0 (- (length trimmed) 3)))
+        trimmed)))
+
 ;; Extract code from between markdown fences, or return text as-is
 (defn extract-code
   :sig [(response-text : String) (language : String) -> String]

@@ -19,7 +19,7 @@ Supports interpreted execution via `airl run` and AOT-compiled native binaries v
 
 ## What It Measures
 
-For each of 25 coding tasks, the tool:
+For each of 100 coding tasks (across 4 difficulty tiers), the tool:
 
 1. Sends the task to the LLM with AIRL and Python system prompts
 2. Extracts generated code from the response
@@ -61,7 +61,21 @@ For each of 25 coding tasks, the tool:
 
 # AOT compiled, AIRL only
 ./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --compiled --airl-only
+
+# Run only Tier 2 composition tasks (46-70)
+./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 4 --airl-only
+./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 5 --airl-only
+./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 6 --airl-only
 ```
+
+## Task Tiers
+
+| Tier | Tasks | Description |
+|------|-------|-------------|
+| 1: Stdlib Direct | 01-45 | Call the right function — tests stdlib knowledge |
+| 2: Composition | 46-70 | Chain 2-3 operations — tests type flow across function boundaries |
+| 3: Recursion | 71-85 | Functional-only control flow — tests where Python-trained models break |
+| 4: Contracts & Types | 86-100 | AIRL-specific features — contracts, variants, Result handling |
 
 ## Pre-flight Checks
 
@@ -83,7 +97,7 @@ The tool verifies before running:
 │   ├── airl_header.md    # Token-efficient AIRL reference header
 │   ├── airl_few_shot.md  # 6 worked examples
 │   └── python_system.md  # Python generation prompt
-├── tasks/                # 25 task specifications (symlink to AIRL repo)
+├── tasks/                # 100 task specifications across 4 tiers (symlink to AIRL repo)
 ├── findings/             # Archived results from each benchmark run
 ├── results/              # Latest benchmark report
 └── output/               # Generated code + compiled binaries (gitignored)

@@ -52,9 +52,11 @@
              "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
              "limit"    (parse-flag args "--limit"    "0")
              "only"     (parse-flag args "--only"     "")]))
-      (map-set (map-set (map-set base "airl-only" (has-flag args "--airl-only"))
+      (map-set (map-set (map-set (map-set base
+               "airl-only" (has-flag args "--airl-only"))
                "compiled" (has-flag args "--compiled"))
-               "python-only" (has-flag args "--python-only"))))
+               "python-only" (has-flag args "--python-only"))
+               "c-only" (has-flag args "--c-only"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -189,6 +191,13 @@
   :ensures [(not (= result ""))]
   :body (str system-prompt "\n\nTASK:\n" task-spec))
 
+(defn build-c-prompt
+  :sig [(system-prompt : String) (task-spec : String) -> String]
+  :intent "Combine C system prompt with task specification"
+  :requires [(valid task-spec)]
+  :ensures [(not (= result ""))]
+  :body (str system-prompt "\n\nTASK:\n" task-spec))
+
 ;; ── Output comparison ─────────────────────────────────────────────
 
 (defn compare-outputs
@@ -208,7 +217,7 @@
 (defn process-language-result
   :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) (compiled : Bool) -> Map]
   :intent "Process an LLM response: extract code, write file, run (or compile+run), return result map"
-  :requires [(or (= language "airl") (= language "python")) (not (= task-file ""))]
+  :requires [(not (= task-file ""))]
   :ensures [(map-has result "correct") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (match response
@@ -216,19 +225,24 @@
         (let (response-text : String (map-get-or resp-map "response" ""))
              (code : String (strip-trailing-fence (extract-code response-text language)))
              (tokens : Map (get-token-counts resp-map))
-             (ext : String (if (= language "airl") ".airl" ".py"))
+             (ext : String (if (= language "airl") ".airl" (if (= language "c") ".c" ".py")))
              (out-path : String (str output-dir "/" language "/" task-file ext))
           (do
             (write-file out-path code)
             (let (exec-result : Map
                     (if (= language "python")
                       (run-python out-path)
-                      (if compiled
-                        (let (bin-path : String (str output-dir "/bin/" task-file))
+                      (if (= language "c")
+                        (let (bin-path : String (str output-dir "/bin/c_" task-file))
                           (do
                             (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
-                            (run-airl-compiled airl-bin out-path bin-path)))
-                        (run-airl airl-bin out-path))))
+                            (run-c-compiled out-path bin-path)))
+                        (if compiled
+                          (let (bin-path : String (str output-dir "/bin/" task-file))
+                            (do
+                              (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
+                              (run-airl-compiled airl-bin out-path bin-path)))
+                          (run-airl airl-bin out-path)))))
               (map-from
                 ["correct"            (map-get-or exec-result "success" false)
                  "stdout"             (map-get-or exec-result "stdout" "")
@@ -246,10 +260,10 @@
              "code-chars" 0]))))
 
 (defn process-task
-  :sig [(config : Map) (airl-sys-prompt : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (task-file : String) -> Map]
-  :intent "Run one benchmark task: generate code in both languages, execute, collect results"
+  :sig [(config : Map) (airl-sys-prompt : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (c-sys-prompt : String) (task-file : String) -> Map]
+  :intent "Run one benchmark task: generate code in selected languages, execute, collect results"
   :requires [(map-has config "model") (map-has config "tasks") (not (= task-file ""))]
-  :ensures [(map-has result "task-name") (map-has result "airl-correct") (map-has result "python-correct") (map-has result "output-match")]
+  :ensures [(map-has result "task-name")]
   :body
     (let (task-dir : String (map-get config "tasks"))
          (model : String (map-get config "model"))
@@ -259,35 +273,50 @@
          (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
          (airl-only : Bool (map-get-or config "airl-only" false))
          (python-only : Bool (map-get-or config "python-only" false))
+         (c-only : Bool (map-get-or config "c-only" false))
          (compiled : Bool (map-get-or config "compiled" false))
          (task-spec : String (read-file (str task-dir "/" task-file)))
       (do
         (print "  Processing:" task-file)
         (let (skip-result : Map (map-from ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
                            "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
-             (airl-result : Map (if python-only
-                skip-result
+             (run-airl-lang : Bool (not (or python-only c-only)))
+             (run-py : Bool (not (or airl-only c-only)))
+             (run-c : Bool (or c-only (not (or airl-only python-only))))
+             (airl-result : Map (if run-airl-lang
                 (process-language-result
                   (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
-                  "airl" task-file output-dir airl-bin compiled)))
-             (py-result : Map (if airl-only
-                skip-result
+                  "airl" task-file output-dir airl-bin compiled)
+                skip-result))
+             (py-result : Map (if run-py
                 (process-language-result
                   (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
-                  "python" task-file output-dir airl-bin false)))
+                  "python" task-file output-dir airl-bin false)
+                skip-result))
+             (c-result : Map (if run-c
+                (process-language-result
+                  (query-llm backend host model (build-c-prompt c-sys-prompt task-spec))
+                  "c" task-file output-dir airl-bin false)
+                skip-result))
           (map-from
             ["task-name"           task-file
              "airl-correct"        (map-get-or airl-result "correct" false)
              "python-correct"      (map-get-or py-result "correct" false)
+             "c-correct"           (map-get-or c-result "correct" false)
              "airl-prompt-tok"     (map-get-or airl-result "prompt-tokens" 0)
              "airl-completion-tok" (map-get-or airl-result "completion-tokens" 0)
              "py-prompt-tok"       (map-get-or py-result "prompt-tokens" 0)
              "py-completion-tok"   (map-get-or py-result "completion-tokens" 0)
+             "c-prompt-tok"        (map-get-or c-result "prompt-tokens" 0)
+             "c-completion-tok"    (map-get-or c-result "completion-tokens" 0)
              "airl-time-ms"        (map-get-or airl-result "elapsed-ms" 0)
              "airl-compile-ms"     (map-get-or airl-result "compile-ms" 0)
              "python-time-ms"      (map-get-or py-result "elapsed-ms" 0)
+             "c-time-ms"           (map-get-or c-result "elapsed-ms" 0)
+             "c-compile-ms"        (map-get-or c-result "compile-ms" 0)
              "airl-chars"          (map-get-or airl-result "code-chars" 0)
              "python-chars"        (map-get-or py-result "code-chars" 0)
+             "c-chars"             (map-get-or c-result "code-chars" 0)
              "output-match"        (compare-outputs
                                      (map-get-or airl-result "stdout" "")
                                      (map-get-or py-result "stdout" ""))])))))
@@ -306,18 +335,19 @@
         (do
           (let (output-dir : String (map-get config "output"))
             (do
-              (shell-exec "mkdir" ["-p" (str output-dir "/airl") (str output-dir "/python")])
+              (shell-exec "mkdir" ["-p" (str output-dir "/airl") (str output-dir "/python") (str output-dir "/c")])
               (shell-exec "mkdir" ["-p" "results" "findings"])
               (let (airl-sys-prompt : String (load-system-prompt "prompts/airl_system.md"))
                    (airl-llm-guide : String (load-system-prompt (map-get-or config "guide" "prompts/airl_llm_guide.md")))
                    (airl-few-shot : String (load-system-prompt "prompts/airl_few_shot.md"))
                    (py-sys-prompt : String (load-system-prompt "prompts/python_system.md"))
+                   (c-sys-prompt : String (load-system-prompt "prompts/c_system.md"))
                    (all-tasks : List (get-task-files (map-get config "tasks")))
                    (task-files : List (filter-tasks all-tasks config))
                 (do
                   (print "Found" (int-to-string (length all-tasks)) "tasks, running" (int-to-string (length task-files)))
                   (print "")
-                  (let (results : List (map (fn [tf] (process-task config airl-sys-prompt airl-llm-guide airl-few-shot py-sys-prompt tf)) task-files))
+                  (let (results : List (map (fn [tf] (process-task config airl-sys-prompt airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt tf)) task-files))
                        (report : String (generate-report (map-get config "model") results))
                        (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
                        (run-id : String (pad-run-number (get-next-run-number)))

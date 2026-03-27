@@ -8,24 +8,41 @@
   :ensures [(valid result)]
   :body (if b "PASS" "FAIL"))
 
+;; Detect which languages have data in results
+(defn has-lang-data
+  :sig [(results : List) (key : String) -> Bool]
+  :intent "Check if any result has non-zero data for a language key"
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body (any (fn [r] (or (map-get-or r key false)
+                         (> (map-get-or r (str key "-tok") 0) 0))) results))
+
 ;; Helper: build a single table row
 (defn result-row
-  :sig [(r : Map) -> String]
+  :sig [(r : Map) (show-c : Bool) -> String]
   :intent "Generate one markdown table row from a result map"
   :requires [(map-has r "task-name")]
   :ensures [(starts-with result "| ")]
   :body
     (let (compile-ms : i64 (map-get-or r "airl-compile-ms" 0))
+         (c-compile-ms : i64 (map-get-or r "c-compile-ms" 0))
       (str "| " (map-get-or r "task-name" "?")
            " | " (bool-str (map-get-or r "airl-correct" false))
            " | " (bool-str (map-get-or r "python-correct" false))
+           (if show-c (str " | " (bool-str (map-get-or r "c-correct" false))) "")
            " | " (int-to-string (map-get-or r "airl-completion-tok" 0))
            " | " (int-to-string (map-get-or r "py-completion-tok" 0))
+           (if show-c (str " | " (int-to-string (map-get-or r "c-completion-tok" 0))) "")
            (if (> compile-ms 0) (str " | " (int-to-string compile-ms)) "")
            " | " (int-to-string (map-get-or r "airl-time-ms" 0))
            " | " (int-to-string (map-get-or r "python-time-ms" 0))
+           (if show-c
+             (str (if (> c-compile-ms 0) (str " | " (int-to-string c-compile-ms)) "")
+                  " | " (int-to-string (map-get-or r "c-time-ms" 0)))
+             "")
            " | " (int-to-string (map-get-or r "airl-chars" 0))
            " | " (int-to-string (map-get-or r "python-chars" 0))
+           (if show-c (str " | " (int-to-string (map-get-or r "c-chars" 0))) "")
            " | " (map-get-or r "output-match" "—")
            " |\n")))
 
@@ -37,13 +54,33 @@
   :ensures [(valid result)]
   :body
     (let (has-compile : Bool (any (fn [r] (> (map-get-or r "airl-compile-ms" 0) 0)) results))
-         (header : String (str "| Task | AIRL | Python | AIRL gen tok | Py gen tok |"
-                              (if has-compile " Compile ms |" "")
-                              " AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n"))
-         (separator : String (str "|------|------|--------|-------------|------------|"
-                                 (if has-compile "------------|" "")
-                                 "---------|-------|------------|----------|-------------|\n"))
-         (rows : String (fold (fn [acc r] (str acc (result-row r))) "" results))
+         (show-c : Bool (any (fn [r] (or (map-get-or r "c-correct" false) (> (map-get-or r "c-completion-tok" 0) 0))) results))
+         (has-c-compile : Bool (any (fn [r] (> (map-get-or r "c-compile-ms" 0) 0)) results))
+         (header : String (str "| Task | AIRL | Python |"
+                              (if show-c " C |" "")
+                              " AIRL tok | Py tok |"
+                              (if show-c " C tok |" "")
+                              (if has-compile " AIRL compile |" "")
+                              " AIRL ms | Py ms |"
+                              (if show-c
+                                (str (if has-c-compile " C compile |" "") " C ms |")
+                                "")
+                              " AIRL chars | Py chars |"
+                              (if show-c " C chars |" "")
+                              " Match |\n"))
+         (separator : String (str "|------|------|--------|"
+                                 (if show-c "---|" "")
+                                 "----------|--------|"
+                                 (if show-c "--------|" "")
+                                 (if has-compile "-------------|" "")
+                                 "---------|-------|"
+                                 (if show-c
+                                   (str (if has-c-compile "-----------|" "") "------|")
+                                   "")
+                                 "------------|----------|"
+                                 (if show-c "---------|" "")
+                                 "-------|\n"))
+         (rows : String (fold (fn [acc r] (str acc (result-row r show-c))) "" results))
       (str header separator rows)))
 
 ;; Count correct results for a language
@@ -80,30 +117,33 @@
     (let (total : i64 (length results))
          (airl-pass : i64 (count-correct results "airl-correct"))
          (py-pass : i64 (count-correct results "python-correct"))
-         (airl-prompt-total : i64 (sum-field results "airl-prompt-tok"))
+         (c-pass : i64 (count-correct results "c-correct"))
+         (show-c : Bool (> (sum-field results "c-completion-tok") 0))
          (airl-gen-total : i64 (sum-field results "airl-completion-tok"))
-         (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
          (py-gen-total : i64 (sum-field results "py-completion-tok"))
+         (c-gen-total : i64 (sum-field results "c-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
          (total-compile-ms : i64 (sum-field results "airl-compile-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
+         (total-c-ms : i64 (sum-field results "c-time-ms"))
+         (total-c-compile : i64 (sum-field results "c-compile-ms"))
          (matches : i64 (count-matches results))
-         (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
-         (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
       (str "## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) "\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
+           (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) "\n") "")
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
            "\n### Token Usage\n\n"
-           "| | AIRL | Python |\n"
-           "|---|------|--------|\n"
-           "| Context (per task) | " (int-to-string airl-ctx) " | " (int-to-string py-ctx) " |\n"
-           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |\n"
-           "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
+           "| | AIRL | Python |" (if show-c " C |" "") "\n"
+           "|---|------|--------|" (if show-c "---|" "") "\n"
+           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |"
+             (if show-c (str " " (int-to-string c-gen-total) " |") "") "\n"
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")
-           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
+           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n"
+           (if show-c (str "- **Total C execution time:** " (int-to-string total-c-ms) " ms\n") "")
+           (if (> total-c-compile 0) (str "- **Total C compile time:** " (int-to-string total-c-compile) " ms\n") ""))))
 
 ;; Generate findings document
 (defn generate-findings
@@ -115,18 +155,15 @@
     (let (total : i64 (length results))
          (airl-pass : i64 (count-correct results "airl-correct"))
          (py-pass : i64 (count-correct results "python-correct"))
-         (airl-prompt-total : i64 (sum-field results "airl-prompt-tok"))
-         (airl-gen-total : i64 (sum-field results "airl-completion-tok"))
-         (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
-         (py-gen-total : i64 (sum-field results "py-completion-tok"))
+         (c-pass : i64 (count-correct results "c-correct"))
+         (show-c : Bool (> (sum-field results "c-completion-tok") 0))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
          (total-compile-ms : i64 (sum-field results "airl-compile-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
+         (total-c-ms : i64 (sum-field results "c-time-ms"))
          (airl-pct : i64 (if (= total 0) 0 (/ (* airl-pass 100) total)))
          (py-pct : i64 (if (= total 0) 0 (/ (* py-pass 100) total)))
-         (matches : i64 (count-matches results))
-         (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
-         (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
+         (c-pct : i64 (if (= total 0) 0 (/ (* c-pass 100) total)))
       (str "# AIRL_bench Findings\n\n"
            "**Model:** " model "\n"
            "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
@@ -138,17 +175,14 @@
            "\n## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
-           "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
-           "\n### Token Usage\n\n"
-           "| | AIRL | Python |\n"
-           "|---|------|--------|\n"
-           "| Context (avg per task) | " (int-to-string airl-ctx) " | " (int-to-string py-ctx) " |\n"
-           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |\n"
-           "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
+           (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) " (" (int-to-string c-pct) "%)\n") "")
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")
-           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
+           "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n"
+           (if show-c (str "- **Total C execution time:** " (int-to-string total-c-ms) " ms\n") "")
+           "\n"
+           (generate-summary results))))
 
 ;; Generate full benchmark report
 (defn generate-report

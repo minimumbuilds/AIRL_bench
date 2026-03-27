@@ -87,6 +87,47 @@
            "stderr"     e
            "elapsed-ms" elapsed]))))
 
+;; Compile a C file to a native binary via gcc
+(defn compile-c
+  :sig [(source-path : String) (output-path : String) -> Map]
+  :intent "Compile a C file with gcc, return compile result with timing"
+  :requires [(not (= source-path ""))]
+  :ensures [(map-has result "success") (map-has result "elapsed-ms")]
+  :body
+    (let (start : i64 (time-now))
+         (compile-result : _ (shell-exec "gcc" ["-std=c11" "-O2" "-o" output-path source-path "-lm"]))
+         (elapsed : i64 (- (time-now) start))
+      (match compile-result
+        (Ok _) (map-from
+          ["success"    true
+           "stderr"     ""
+           "elapsed-ms" elapsed])
+        (Err e) (map-from
+          ["success"    false
+           "stderr"     e
+           "elapsed-ms" elapsed]))))
+
+;; Compile and run a C file — returns combined result with separate timings
+(defn run-c-compiled
+  :sig [(source-path : String) (binary-path : String) -> Map]
+  :intent "Compile C with gcc then execute, tracking compile and execution time separately"
+  :requires [(not (= source-path ""))]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
+  :body
+    (let (compile-res : Map (compile-c source-path binary-path))
+      (if (map-get compile-res "success")
+        (let (exec-res : Map (run-compiled binary-path))
+          (map-set (map-set exec-res
+            "compile-ms" (map-get compile-res "elapsed-ms"))
+            "elapsed-ms" (map-get exec-res "elapsed-ms")))
+        ;; Compilation failed
+        (map-from
+          ["success"    false
+           "stdout"     ""
+           "stderr"     (str "compile error: " (map-get compile-res "stderr"))
+           "compile-ms" (map-get compile-res "elapsed-ms")
+           "elapsed-ms" 0]))))
+
 ;; Compile and run an AIRL file — returns combined result with separate timings
 (defn run-airl-compiled
   :sig [(airl-bin : String) (source-path : String) (binary-path : String) -> Map]

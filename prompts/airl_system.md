@@ -108,6 +108,9 @@ Lambda params have NO type annotations.
 - `(all pred list)` -- true if all elements satisfy pred
 - `(find pred list)` -- first matching element, or nil
 - `(sort cmp list)` -- merge sort with comparison function
+- `(unique list)` -- deduplicate, preserves first occurrence
+- `(enumerate list)` -- returns [[0 a] [1 b] ...]
+- `(group-by f list)` -- returns Map of {(f x): [matching elements]}
 
 ### String
 - `(str arg1 arg2 ...)` -- variadic concat with auto-coercion: `(str "count: " 42)` → `"count: 42"`

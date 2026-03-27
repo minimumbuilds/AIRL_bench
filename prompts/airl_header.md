@@ -7,7 +7,7 @@
 3. `if` has EXACTLY 3 forms: `(if cond then else)`. Both branches required. Multi-expr branch: wrap in `do`.
 4. No mixed int/float: `(+ 1 1.0)` errors. Use `(+ 1.0 1.0)` or `int-to-float`.
 5. `let` REQUIRES type annotation AND body: `(let (x : i64 5) body)`. No body = parse error.
-6. `let` paren counting: N nested lets = N closing parens. Body is LAST expr before close paren.
+6. `let` supports multi-binding: `(let (x : T v1) (y : T v2) body)`. PREFER flat multi-binding over nested single lets.
 7. Every `defn` needs `:sig` + `:body` + at least one of `:requires`/`:ensures`. Min guard: `(valid x)`.
 8. `result` only available in `:ensures`/`:invariant`, NOT `:requires`.
 9. `match` arms are FLAT pairs after scrutinee: `(match expr pat1 body1 pat2 body2)`. Must be even count.
@@ -28,8 +28,8 @@
 ```
 (defn NAME :sig [PARAMS -> RET] :requires [CONDS] :ensures [CONDS] :body EXPR)
   optional: :intent "desc" :invariant [CONDS] :execute-on cpu|gpu :priority normal
-(let (NAME : TYPE VAL) BODY)
-(let (N1 : T1 V1) (N2 : T2 V2) BODY)   ;; multi-binding
+(let (N1 : T1 V1) (N2 : T2 V2) ... BODY) ;; multi-binding (preferred)
+(let (NAME : TYPE VAL) BODY)               ;; single-binding (special case)
 (if COND THEN ELSE)
 (do E1 E2 ... EN)                        ;; returns last
 (match EXPR PAT1 BODY1 PAT2 BODY2 ...)   ;; flat pairs
@@ -229,7 +229,7 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 ### Type conversion
 ```
 (int-to-string n) -> Str    (float-to-string f) -> Str
-(string-to-int s) -> Int    (string-to-float s) -> Float   ; panic on invalid input
+(string-to-int s) -> Result  (string-to-float s) -> Result  ; returns (Ok val) or (Err msg)
 (char-code s) -> Int         ; Unicode codepoint of first char
 (char-from-code n) -> Str    ; codepoint to 1-char string
 (type-of x) -> Str           ; "Int", "Bool", "Map", "List", etc.
@@ -294,6 +294,46 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (json-stringify v) -> Str
 ```
 
+### Thread (thread-per-task, message-passing only)
+```
+(thread-spawn closure) -> Int                       ; spawn thread running 0-arg closure, returns handle
+(thread-join handle) -> Result[any, Str]            ; block until done. Ok(value) or Err(msg)
+```
+
+### Channel (unbounded, std::sync::mpsc)
+```
+(channel-new) -> [Int Int]                          ; returns [sender-handle receiver-handle]
+(channel-send tx value) -> Result[Bool, Str]        ; send value. Err if closed
+(channel-recv rx) -> Result[any, Str]               ; blocking recv. Err if closed
+(channel-recv-timeout rx ms) -> Result[any, Str]    ; recv with timeout. Err "timeout" or "channel closed"
+(channel-close handle) -> Bool                      ; close sender or receiver
+```
+
+### Bytes (big-endian, IntList = byte sequences)
+```
+(bytes-from-int16 n) -> IntList       ; i16 to 2 bytes BE
+(bytes-from-int32 n) -> IntList       ; i32 to 4 bytes BE
+(bytes-from-int64 n) -> IntList       ; i64 to 8 bytes BE
+(bytes-to-int16 buf offset) -> Int    ; read i16 from byte list at offset
+(bytes-to-int32 buf offset) -> Int    ; read i32 from byte list at offset
+(bytes-to-int64 buf offset) -> Int    ; read i64 from byte list at offset
+(bytes-from-string s) -> IntList      ; UTF-8 encode string to bytes
+(bytes-to-string buf offset len) -> Str ; UTF-8 decode bytes to string
+(bytes-concat a b) -> IntList         ; concatenate two byte lists
+(bytes-slice buf offset len) -> IntList ; extract slice with bounds check
+(crc32c buf) -> Int                   ; CRC32C checksum
+```
+
+### TCP (handle-based, all return Result)
+```
+(tcp-connect host port) -> Result[Int, Str]        ; connect, returns handle
+(tcp-close handle) -> Result[Nil, Str]             ; close connection
+(tcp-send handle data) -> Result[Int, Str]         ; send IntList, returns bytes sent
+(tcp-recv handle max-bytes) -> Result[IntList, Str] ; recv up to max-bytes
+(tcp-recv-exact handle n) -> Result[IntList, Str]  ; recv exactly n bytes or error
+(tcp-set-timeout handle ms) -> Result[Nil, Str]    ; ms<=0 = no timeout
+```
+
 ### Tensor (all f32 internally, shapes are [dim ...] int lists)
 ```
 (tensor.zeros [dims])  (tensor.ones [dims])  (tensor.rand [dims] seed)  (tensor.identity n)
@@ -316,6 +356,13 @@ Floats: `f16`/`f32`/`f64`/`bf16` (all f64). Others: `Bool` `String` `Nil` `List`
 (retry agent "fn-name" arg... :max n)        ; exponential backoff
 (escalate agent :reason msg :data val)
 (any-agent) -> Str                           ; first spawned agent name
+```
+
+### Compilation
+```
+(run-bytecode bc-funcs) -> any                           ; execute BCFunc list in bytecode VM
+(compile-to-executable [paths] output) -> Nil            ; source files → native binary (Rust pipeline)
+(compile-bytecode-to-executable bc-funcs output) -> Str  ; BCFunc list → native binary (G3 pipeline)
 ```
 
 ## PATTERNS

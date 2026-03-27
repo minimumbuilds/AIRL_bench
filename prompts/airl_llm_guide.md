@@ -96,14 +96,14 @@ Symbols are identifiers: `x`, `my-function`, `tensor.add`. Hyphens are allowed i
 
 ### S-Expression Nesting and Parenthesis Counting
 
-Each `let` opens one parenthesis. The body of a `let` is the **last expression before its closing paren**. N nested `let` bindings require N closing parens:
+Multi-binding `let` is the **preferred** style — multiple bindings in one `let`, with the body as the last expression:
 
 ```lisp
-;; 3 nested lets → 3 closing parens
-(let (a : i64 1)                  ;; let #1 opens
-  (let (b : i64 2)                ;; let #2 opens
-    (let (c : i64 (+ a b))        ;; let #3 opens
-      (print c))))                ;; body, then ))) closes #3, #2, #1
+;; PREFERRED — multi-binding let: 3 bindings, 1 closing paren
+(let (a : i64 1)
+     (b : i64 2)
+     (c : i64 (+ a b))
+  (print c))
 ```
 
 **Common mistake — closing `let` before its body:**
@@ -390,7 +390,7 @@ All take 2 arguments, return `Bool`. Work on Int, UInt, Float, and String.
 
 **Functions that do NOT exist in AIRL** — do not use these:
 
-`nil?`, `null?`, `list`, `catch`, `throw`, `ord`, `chr`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
+`nil?`, `null?`, `list`, `try`, `catch`, `throw`, `ord`, `chr`, `char-at-int`, `string-ref`, `number->string`, `string->number`, `typeof`, `instanceof`, `require`, `import`
 
 Use `char-code` / `char-from-code` for character↔integer conversion. Use `take` / `drop` from stdlib for list slicing. If you need key-value associations, use `Map` (not lists of pairs). If you need to parse a number from a string, use `string-to-int` or `string-to-float`. If you need to check string emptiness, use `(= s "")`. For character count (Unicode-aware), use `(char-count s)` instead of `(length s)` (which returns byte length).
 
@@ -414,8 +414,8 @@ Use `char-code` / `char-from-code` for character↔integer conversion. Use `take
 |----------|-----------|-------------|
 | `int-to-string` | `(int-to-string n)` → Str | Convert integer to string |
 | `float-to-string` | `(float-to-string f)` → Str | Convert float to string |
-| `string-to-int` | `(string-to-int s)` → Result | Parse string as integer. Returns `(Ok int)` on success, `(Err message)` on invalid input |
-| `string-to-float` | `(string-to-float s)` → Result | Parse string as float. Returns `(Ok float)` on success, `(Err message)` on invalid input |
+| `string-to-int` | `(string-to-int s)` → Result | Parse string as integer. Returns `(Ok int)` or `(Err message)` |
+| `string-to-float` | `(string-to-float s)` → Result | Parse string as float. Returns `(Ok float)` or `(Err message)` |
 | `char-code` | `(char-code s)` → Int | First character's Unicode code point |
 | `char-from-code` | `(char-from-code n)` → Str | Unicode code point to single-character string |
 
@@ -508,6 +508,85 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `base64-encode` | `(base64-encode str)` → Str | Base64 encode |
 | `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
 | `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
+
+### Byte Encoding (v0.4.0)
+
+Binary data is represented as `IntList` (list of integers 0-255). All integer encoding uses big-endian byte order.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `bytes-from-int16` | `(bytes-from-int16 n)` → IntList | Encode i16 as 2 bytes (big-endian) |
+| `bytes-from-int32` | `(bytes-from-int32 n)` → IntList | Encode i32 as 4 bytes (big-endian) |
+| `bytes-from-int64` | `(bytes-from-int64 n)` → IntList | Encode i64 as 8 bytes (big-endian) |
+| `bytes-to-int16` | `(bytes-to-int16 buf offset)` → Int | Decode i16 from byte list at offset |
+| `bytes-to-int32` | `(bytes-to-int32 buf offset)` → Int | Decode i32 from byte list at offset |
+| `bytes-to-int64` | `(bytes-to-int64 buf offset)` → Int | Decode i64 from byte list at offset |
+| `bytes-from-string` | `(bytes-from-string s)` → IntList | UTF-8 encode string to bytes |
+| `bytes-to-string` | `(bytes-to-string buf offset len)` → Str | UTF-8 decode bytes to string |
+| `bytes-concat` | `(bytes-concat a b)` → IntList | Concatenate two byte lists |
+| `bytes-slice` | `(bytes-slice buf offset len)` → IntList | Extract slice with bounds check |
+| `crc32c` | `(crc32c buf)` → Int | CRC32C (Castagnoli) checksum |
+
+### TCP Sockets (v0.4.0)
+
+Handle-based TCP networking. Connections are managed via integer handles. All operations return `Result`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `tcp-connect` | `(tcp-connect host port)` → Result[Int, Str] | Connect to host:port, returns handle |
+| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection |
+| `tcp-send` | `(tcp-send handle data)` → Result[Int, Str] | Send byte list, returns bytes sent |
+| `tcp-recv` | `(tcp-recv handle max-bytes)` → Result[IntList, Str] | Receive up to max-bytes |
+| `tcp-recv-exact` | `(tcp-recv-exact handle n)` → Result[IntList, Str] | Receive exactly n bytes or error |
+| `tcp-set-timeout` | `(tcp-set-timeout handle ms)` → Result[Nil, Str] | Set read/write timeout (ms ≤ 0 = none) |
+
+```lisp
+;; TCP client example
+(let (conn : _ (tcp-connect "127.0.0.1" 8080))
+  (match conn
+    (Ok handle) (do
+      (tcp-send handle (bytes-from-string "GET / HTTP/1.0\r\n\r\n"))
+      (let (response : _ (tcp-recv handle 4096))
+        (match response
+          (Ok data) (print (bytes-to-string data 0 (length data)))
+          (Err e) (print "recv error:" e)))
+      (tcp-close handle))
+    (Err e) (print "connect error:" e)))
+```
+
+### Concurrency (v0.5.0)
+
+Thread-per-task model with message-passing channels. No shared mutable state.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `thread-spawn` | `(thread-spawn closure)` → Int | Spawn OS thread running 0-arg closure, returns handle |
+| `thread-join` | `(thread-join handle)` → Result | Block until done. Ok(value) or Err(error-msg) |
+| `channel-new` | `(channel-new)` → [Int Int] | Create unbounded channel, returns [sender receiver] handles |
+| `channel-send` | `(channel-send tx value)` → Result | Send value. Err if channel closed |
+| `channel-recv` | `(channel-recv rx)` → Result | Blocking receive. Err if channel closed |
+| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. Err "timeout" or "channel closed" |
+| `channel-close` | `(channel-close handle)` → Bool | Close sender or receiver endpoint |
+
+```lisp
+;; Spawn a thread, capture variables from enclosing scope
+(let (x : i64 10)
+  (let (h : i64 (thread-spawn (fn [] (+ x 5))))
+    (match (thread-join h)
+      (Ok v) v       ;; 15
+      (Err e) -1)))
+
+;; Producer/consumer via channels
+(let (ch : List (channel-new))
+  (let (tx : i64 (at ch 0))
+    (let (rx : i64 (at ch 1))
+      (do
+        (thread-spawn (fn []
+          (do (channel-send tx "hello") (channel-close tx))))
+        (match (channel-recv rx)
+          (Ok v) v       ;; "hello"
+          (Err _) "failed"))))))
+```
 
 ### Tensor Operations
 
@@ -835,11 +914,13 @@ Returns the name of the first spawned agent:
 
 ## 10a. Concurrency Model
 
-AIRL's parallelism is **agent-level only**: process isolation + message passing. There are no thread-level concurrency primitives (no threads, channels, mutexes, atomics, or async/await within a single program).
+AIRL supports two levels of concurrency:
 
-All concurrent primitives: `spawn-agent`, `send`, `send-async`, `await`, `parallel`, `broadcast`.
+**Thread-level (v0.5.0):** Thread-per-task with message-passing channels. `thread-spawn` creates an OS thread running a closure. `channel-new` creates unbounded channels for inter-thread communication. No shared mutable state — channels are the only way threads communicate. See section 6 "Concurrency" for full API.
 
-Fine-grained parallelism within a computation requires spawning agent processes. This is a deliberate design choice for safety and verifiability — no shared mutable state means no data races and no need for synchronization primitives.
+**Agent-level:** Process isolation + message passing via `spawn-agent`, `send`, `send-async`, `await`, `parallel`, `broadcast`. Agents are separate OS processes communicating via RPC.
+
+Both levels enforce the same principle: **no shared mutable state**. Threads use channels, agents use message passing. No mutexes, atomics, or locks are exposed to AIRL programs.
 
 ---
 
@@ -1224,13 +1305,13 @@ Define sum types (enums) and product types (structs):
 
 ### Chained Let Bindings
 
-Since `let` returns the body expression, chain computations with nested `let`:
+Use multi-binding `let` to chain computations (preferred over nested single-binding lets):
 
 ```lisp
 (let (a : i64 10)
-  (let (b : i64 (* a 2))
-    (let (c : i64 (+ b 5))
-      (print "Result:" c))))  ;; prints 25
+     (b : i64 (* a 2))
+     (c : i64 (+ b 5))
+  (print "Result:" c))  ;; prints 25
 ```
 
 ### Error Propagation with Nested Match

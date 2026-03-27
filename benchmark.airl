@@ -41,17 +41,19 @@
   :intent "Parse CLI arguments into a config map with defaults"
   :requires [(valid args)]
   :ensures [(map-has result "model") (map-has result "backend") (map-has result "tasks")]
-  :body (map-from
-          ["model"    (parse-flag args "--model"    "qwen3-coder")
-           "host"     (parse-flag args "--host"     "http://localhost:11434")
-           "backend"  (parse-flag args "--backend"  "ollama")
-           "tasks"    (parse-flag args "--tasks"    "./tasks")
-           "output"   (parse-flag args "--output"   "./output")
-           "airl-bin" (parse-flag args "--airl-bin" "airl-driver")
-           "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
-           "limit"    (parse-flag args "--limit"    "0")
-           "only"     (parse-flag args "--only"     "")
-           "airl-only" (has-flag args "--airl-only")]))
+  :body
+    (let (base : Map (map-from
+            ["model"    (parse-flag args "--model"    "qwen3-coder")
+             "host"     (parse-flag args "--host"     "http://localhost:11434")
+             "backend"  (parse-flag args "--backend"  "ollama")
+             "tasks"    (parse-flag args "--tasks"    "./tasks")
+             "output"   (parse-flag args "--output"   "./output")
+             "airl-bin" (parse-flag args "--airl-bin" "airl-driver")
+             "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
+             "limit"    (parse-flag args "--limit"    "0")
+             "only"     (parse-flag args "--only"     "")]))
+      (map-set (map-set base "airl-only" (has-flag args "--airl-only"))
+               "compiled" (has-flag args "--compiled"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -72,7 +74,7 @@
   :requires [(not (= host ""))]
   :ensures [(valid result)]
   :body (match (shell-exec "curl" ["-sf" (str host "/api/tags")])
-          (Ok m) (= (map-get m "exit-code") 0)
+          (Ok _) true
           (Err e) (do (print "ERROR: Cannot reach Ollama at:" host)
                       (print "  " e)
                       false)))
@@ -110,8 +112,8 @@
   :ensures [(>= result 1)]
   :body
     (match (shell-exec "ls" ["findings/"])
-      (Ok exec-map)
-        (let (listing : String (trim (map-get exec-map "stdout")))
+      (Ok listing-raw)
+        (let (listing : String (trim listing-raw))
           (if (= listing "")
             1
             (+ 1 (length (filter (fn [f] (ends-with f ".md")) (split listing "\n"))))))
@@ -136,8 +138,8 @@
   :requires [(valid task-dir)]
   :ensures [(valid result)]
   :body (match (shell-exec "ls" [task-dir])
-          (Ok exec-map)
-            (let (raw : String (trim (map-get exec-map "stdout")))
+          (Ok listing-raw)
+            (let (raw : String (trim listing-raw))
               (if (= raw "")
                 []
                 (filter (fn [f] (ends-with f ".md")) (split raw "\n"))))
@@ -203,8 +205,8 @@
 ;; ── Single task processing ────────────────────────────────────────
 
 (defn process-language-result
-  :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) -> Map]
-  :intent "Process an Ollama response: extract code, write file, run, return result map"
+  :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) (compiled : Bool) -> Map]
+  :intent "Process an LLM response: extract code, write file, run (or compile+run), return result map"
   :requires [(or (= language "airl") (= language "python")) (not (= task-file ""))]
   :ensures [(map-has result "correct") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
@@ -217,13 +219,20 @@
              (out-path : String (str output-dir "/" language "/" task-file ext))
           (do
             (write-file out-path code)
-            (let (exec-result : Map (if (= language "python")
-                                      (run-python out-path)
-                                      (run-airl airl-bin out-path)))
+            (let (exec-result : Map
+                    (if (= language "python")
+                      (run-python out-path)
+                      (if compiled
+                        (let (bin-path : String (str output-dir "/bin/" task-file))
+                          (do
+                            (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
+                            (run-airl-compiled airl-bin out-path bin-path)))
+                        (run-airl airl-bin out-path))))
               (map-from
                 ["correct"            (map-get-or exec-result "success" false)
                  "stdout"             (map-get-or exec-result "stdout" "")
                  "elapsed-ms"         (map-get-or exec-result "elapsed-ms" 0)
+                 "compile-ms"         (map-get-or exec-result "compile-ms" 0)
                  "prompt-tokens"      (map-get-or tokens "prompt_tokens" 0)
                  "completion-tokens"  (map-get-or tokens "completion_tokens" 0)
                  "code-chars"         (length code)]))))
@@ -231,7 +240,7 @@
         (do
           (print "    Error:" e)
           (map-from
-            ["correct" false "stdout" "" "elapsed-ms" 0
+            ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
              "prompt-tokens" 0 "completion-tokens" 0
              "code-chars" 0]))))
 
@@ -248,18 +257,19 @@
          (output-dir : String (map-get config "output"))
          (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
          (airl-only : Bool (map-get-or config "airl-only" false))
+         (compiled : Bool (map-get-or config "compiled" false))
          (task-spec : String (read-file (str task-dir "/" task-file)))
       (do
         (print "  Processing:" task-file)
         (let (airl-result : Map (process-language-result
                 (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
-                "airl" task-file output-dir airl-bin))
+                "airl" task-file output-dir airl-bin compiled))
              (py-result : Map (if airl-only
-                (map-from ["correct" false "stdout" "" "elapsed-ms" 0
+                (map-from ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
                            "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0])
                 (process-language-result
                   (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
-                  "python" task-file output-dir airl-bin)))
+                  "python" task-file output-dir airl-bin false)))
           (map-from
             ["task-name"           task-file
              "airl-correct"        (map-get-or airl-result "correct" false)
@@ -269,6 +279,7 @@
              "py-prompt-tok"       (map-get-or py-result "prompt-tokens" 0)
              "py-completion-tok"   (map-get-or py-result "completion-tokens" 0)
              "airl-time-ms"        (map-get-or airl-result "elapsed-ms" 0)
+             "airl-compile-ms"     (map-get-or airl-result "compile-ms" 0)
              "python-time-ms"      (map-get-or py-result "elapsed-ms" 0)
              "airl-chars"          (map-get-or airl-result "code-chars" 0)
              "python-chars"        (map-get-or py-result "code-chars" 0)
@@ -280,9 +291,10 @@
 
 (let (config : Map (parse-config (get-args)))
   (do
-    (print "AIRL_bench")
+    (print "AIRL_bench v0.2.0")
     (print "Model:" (map-get config "model"))
     (print "Backend:" (map-get-or config "backend" "ollama"))
+    (print "Mode:" (if (map-get-or config "compiled" false) "compiled (AOT)" "interpreted"))
     (print "Tasks:" (map-get config "tasks"))
     (print "")
     (if (check-backend config)

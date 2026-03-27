@@ -15,17 +15,19 @@
   :requires [(map-has r "task-name")]
   :ensures [(starts-with result "| ")]
   :body
-    (str "| " (map-get-or r "task-name" "?")
-         " | " (bool-str (map-get-or r "airl-correct" false))
-         " | " (bool-str (map-get-or r "python-correct" false))
-         " | " (int-to-string (map-get-or r "airl-completion-tok" 0))
-         " | " (int-to-string (map-get-or r "py-completion-tok" 0))
-         " | " (int-to-string (map-get-or r "airl-time-ms" 0))
-         " | " (int-to-string (map-get-or r "python-time-ms" 0))
-         " | " (int-to-string (map-get-or r "airl-chars" 0))
-         " | " (int-to-string (map-get-or r "python-chars" 0))
-         " | " (map-get-or r "output-match" "—")
-         " |\n"))
+    (let (compile-ms : i64 (map-get-or r "airl-compile-ms" 0))
+      (str "| " (map-get-or r "task-name" "?")
+           " | " (bool-str (map-get-or r "airl-correct" false))
+           " | " (bool-str (map-get-or r "python-correct" false))
+           " | " (int-to-string (map-get-or r "airl-completion-tok" 0))
+           " | " (int-to-string (map-get-or r "py-completion-tok" 0))
+           (if (> compile-ms 0) (str " | " (int-to-string compile-ms)) "")
+           " | " (int-to-string (map-get-or r "airl-time-ms" 0))
+           " | " (int-to-string (map-get-or r "python-time-ms" 0))
+           " | " (int-to-string (map-get-or r "airl-chars" 0))
+           " | " (int-to-string (map-get-or r "python-chars" 0))
+           " | " (map-get-or r "output-match" "—")
+           " |\n")))
 
 ;; Generate markdown results table
 (defn generate-results-table
@@ -34,8 +36,13 @@
   :requires [(valid results)]
   :ensures [(valid result)]
   :body
-    (let (header : String "| Task | AIRL | Python | AIRL gen tok | Py gen tok | AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n")
-         (separator : String "|------|------|--------|-------------|------------|---------|-------|------------|----------|-------------|\n")
+    (let (has-compile : Bool (any (fn [r] (> (map-get-or r "airl-compile-ms" 0) 0)) results))
+         (header : String (str "| Task | AIRL | Python | AIRL gen tok | Py gen tok |"
+                              (if has-compile " Compile ms |" "")
+                              " AIRL ms | Py ms | AIRL chars | Py chars | Output Match |\n"))
+         (separator : String (str "|------|------|--------|-------------|------------|"
+                                 (if has-compile "------------|" "")
+                                 "---------|-------|------------|----------|-------------|\n"))
          (rows : String (fold (fn [acc r] (str acc (result-row r))) "" results))
       (str header separator rows)))
 
@@ -78,10 +85,9 @@
          (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
          (py-gen-total : i64 (sum-field results "py-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
+         (total-compile-ms : i64 (sum-field results "airl-compile-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
          (matches : i64 (count-matches results))
-         ;; Context overhead = prompt tokens for first task (same for all tasks)
-         ;; Generation tokens are the apples-to-apples comparison
          (airl-ctx : i64 (if (> total 0) (/ airl-prompt-total total) 0))
          (py-ctx : i64 (if (> total 0) (/ py-prompt-total total) 0))
       (str "## Summary\n\n"
@@ -96,6 +102,7 @@
            "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
+           (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")
            "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
 
 ;; Generate findings document
@@ -113,6 +120,7 @@
          (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
          (py-gen-total : i64 (sum-field results "py-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
+         (total-compile-ms : i64 (sum-field results "airl-compile-ms"))
          (total-py-ms : i64 (sum-field results "python-time-ms"))
          (airl-pct : i64 (if (= total 0) 0 (/ (* airl-pass 100) total)))
          (py-pct : i64 (if (= total 0) 0 (/ (* py-pass 100) total)))
@@ -123,6 +131,7 @@
            "**Model:** " model "\n"
            "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
            "**AIRL binary:** " airl-bin "\n"
+           "**Mode:** " (if (> total-compile-ms 0) "compiled (AOT)" "interpreted") "\n"
            "**Tasks:** " (int-to-string total) "\n\n"
            "## Results\n\n"
            (generate-results-table results)
@@ -138,6 +147,7 @@
            "| Prompt (total) | " (int-to-string airl-prompt-total) " | " (int-to-string py-prompt-total) " |\n"
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
+           (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")
            "- **Total Python execution time:** " (int-to-string total-py-ms) " ms\n")))
 
 ;; Generate full benchmark report

@@ -1,4 +1,5 @@
 ;; runner.airl — Execute generated code and time it
+;; v0.6.0: shell-exec returns Result[String, String] where Ok wraps stdout
 
 ;; Run a Python script and return execution results with timing
 (defn run-python
@@ -8,23 +9,21 @@
   :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (let (start : i64 (time-now))
-      (let (exec-result : _ (shell-exec "python3" [filepath]))
-        (let (elapsed : i64 (- (time-now) start))
-          (match exec-result
-            (Ok exec-map) (map-from
-              ["success"    (= (map-get exec-map "exit-code") 0)
-               "stdout"     (map-get exec-map "stdout")
-               "stderr"     (map-get exec-map "stderr")
-               "exit-code"  (map-get exec-map "exit-code")
-               "elapsed-ms" elapsed])
-            (Err e) (map-from
-              ["success"    false
-               "stdout"     ""
-               "stderr"     e
-               "exit-code"  -1
-               "elapsed-ms" elapsed]))))))
+         (exec-result : _ (shell-exec "python3" [filepath]))
+         (elapsed : i64 (- (time-now) start))
+      (match exec-result
+        (Ok stdout) (map-from
+          ["success"    true
+           "stdout"     stdout
+           "stderr"     ""
+           "elapsed-ms" elapsed])
+        (Err e) (map-from
+          ["success"    false
+           "stdout"     ""
+           "stderr"     e
+           "elapsed-ms" elapsed]))))
 
-;; Run an AIRL file and return execution results with timing
+;; Run an AIRL file via the interpreter and return results with timing
 (defn run-airl
   :sig [(airl-bin : String) (filepath : String) -> Map]
   :intent "Execute an AIRL file via the given airl binary, return result map with timing"
@@ -32,18 +31,79 @@
   :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (let (start : i64 (time-now))
-      (let (exec-result : _ (shell-exec airl-bin ["run" filepath]))
-        (let (elapsed : i64 (- (time-now) start))
-          (match exec-result
-            (Ok exec-map) (map-from
-              ["success"    (= (map-get exec-map "exit-code") 0)
-               "stdout"     (map-get exec-map "stdout")
-               "stderr"     (map-get exec-map "stderr")
-               "exit-code"  (map-get exec-map "exit-code")
-               "elapsed-ms" elapsed])
-            (Err e) (map-from
-              ["success"    false
-               "stdout"     ""
-               "stderr"     e
-               "exit-code"  -1
-               "elapsed-ms" elapsed]))))))
+         (exec-result : _ (shell-exec airl-bin ["run" filepath]))
+         (elapsed : i64 (- (time-now) start))
+      (match exec-result
+        (Ok stdout) (map-from
+          ["success"    true
+           "stdout"     stdout
+           "stderr"     ""
+           "elapsed-ms" elapsed])
+        (Err e) (map-from
+          ["success"    false
+           "stdout"     ""
+           "stderr"     e
+           "elapsed-ms" elapsed]))))
+
+;; Compile an AIRL file to a native binary via AOT
+(defn compile-airl
+  :sig [(airl-bin : String) (source-path : String) (output-path : String) -> Map]
+  :intent "AOT compile an AIRL file to a native binary, return compile result with timing"
+  :requires [(not (= source-path "")) (not (= airl-bin ""))]
+  :ensures [(map-has result "success") (map-has result "elapsed-ms")]
+  :body
+    (let (start : i64 (time-now))
+         (compile-result : _ (shell-exec airl-bin ["compile" source-path "-o" output-path]))
+         (elapsed : i64 (- (time-now) start))
+      (match compile-result
+        (Ok _) (map-from
+          ["success"    true
+           "stderr"     ""
+           "elapsed-ms" elapsed])
+        (Err e) (map-from
+          ["success"    false
+           "stderr"     e
+           "elapsed-ms" elapsed]))))
+
+;; Run a pre-compiled native binary
+(defn run-compiled
+  :sig [(binary-path : String) -> Map]
+  :intent "Execute a compiled native AIRL binary, return result map with timing"
+  :requires [(not (= binary-path ""))]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
+  :body
+    (let (start : i64 (time-now))
+         (exec-result : _ (shell-exec binary-path []))
+         (elapsed : i64 (- (time-now) start))
+      (match exec-result
+        (Ok stdout) (map-from
+          ["success"    true
+           "stdout"     stdout
+           "stderr"     ""
+           "elapsed-ms" elapsed])
+        (Err e) (map-from
+          ["success"    false
+           "stdout"     ""
+           "stderr"     e
+           "elapsed-ms" elapsed]))))
+
+;; Compile and run an AIRL file — returns combined result with separate timings
+(defn run-airl-compiled
+  :sig [(airl-bin : String) (source-path : String) (binary-path : String) -> Map]
+  :intent "AOT compile then execute, tracking compile and execution time separately"
+  :requires [(not (= source-path "")) (not (= airl-bin ""))]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
+  :body
+    (let (compile-res : Map (compile-airl airl-bin source-path binary-path))
+      (if (map-get compile-res "success")
+        (let (exec-res : Map (run-compiled binary-path))
+          (map-set (map-set exec-res
+            "compile-ms" (map-get compile-res "elapsed-ms"))
+            "elapsed-ms" (map-get exec-res "elapsed-ms")))
+        ;; Compilation failed
+        (map-from
+          ["success"    false
+           "stdout"     ""
+           "stderr"     (str "compile error: " (map-get compile-res "stderr"))
+           "compile-ms" (map-get compile-res "elapsed-ms")
+           "elapsed-ms" 0]))))

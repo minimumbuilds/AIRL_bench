@@ -2,6 +2,20 @@
 ;;
 ;; Provides functions for interacting with the Ollama /api/generate endpoint.
 
+;; Escape a string for JSON embedding (workaround for json-stringify not escaping newlines)
+(defn json-escape
+  :sig [(s : String) -> String]
+  :intent "Escape backslashes, quotes, and newlines for JSON string values"
+  :requires [(valid s)]
+  :ensures [(valid result)]
+  :body
+    (let (escaped-bs : String (replace s "\\" "\\\\"))
+         (escaped-qt : String (replace escaped-bs "\"" "\\\""))
+         (escaped-nl : String (replace escaped-qt "\n" "\\n"))
+         (escaped-cr : String (replace escaped-nl "\r" "\\r"))
+         (escaped-tab : String (replace escaped-cr "\t" "\\t"))
+      escaped-tab))
+
 ;; Build a JSON request body for Ollama /api/generate
 (defn build-request-body
   :sig [(model : String) (prompt : String) -> String]
@@ -9,26 +23,30 @@
   :requires [(not (= model "")) (not (= prompt ""))]
   :ensures [(contains result "model") (contains result "prompt")]
   :body
-    (let (req : Map (map-set (map-from ["model" model "prompt" prompt]) "stream" false))
-      (json-stringify req)))
+    (str "{\"model\":\"" (json-escape model)
+         "\",\"prompt\":\"" (json-escape prompt)
+         "\",\"stream\":false}"))
 
 ;; Send a prompt to Ollama and return the parsed response map
+;; Uses curl via shell-exec since http-request is a stub in v0.6.0 airl-rt
 (defn query-ollama
   :sig [(host : String) (model : String) (prompt : String) -> Result[Map, String]]
-  :intent "POST a generate request to Ollama and return the parsed JSON response"
+  :intent "POST a generate request to Ollama via curl and return the parsed JSON response"
   :requires [(not (= host "")) (not (= model ""))]
   :ensures [(valid result)]
   :body
     (let (url : String (str host "/api/generate"))
-      (let (req-body : String (build-request-body model prompt))
-        (let (headers : Map (map-from ["Content-Type" "application/json"]))
-          (match (http-request "POST" url req-body headers)
-            (Ok response-text)
-              (match (json-parse response-text)
-                (Ok parsed-map) (Ok parsed-map)
-                (Err parse-err) (Err (str "JSON parse error: " parse-err)))
-            (Err http-err)
-              (Err (str "HTTP error: " http-err)))))))
+         (req-body : String (build-request-body model prompt))
+         (tmp-path : String "output/.ollama_request.json")
+      (do
+        (write-file tmp-path req-body)
+        (match (shell-exec "curl" ["-sf" "-X" "POST" url "-H" "Content-Type: application/json" "-d" (str "@" tmp-path)])
+          (Ok response-text)
+            (match (json-parse response-text)
+              (Ok parsed-map) (Ok parsed-map)
+              (Err parse-err) (Err (str "JSON parse error: " parse-err)))
+          (Err curl-err)
+            (Err (str "HTTP error: " curl-err))))))
 
 ;; Strip trailing markdown fence from extracted code
 (defn strip-trailing-fence
@@ -50,28 +68,28 @@
   :ensures [(valid result)]
   :body
     (let (fence-open : String (str "```" language "\n"))
-      (let (open-idx : i64 (index-of response-text fence-open))
-        (if (= open-idx -1)
-          ;; No language-specific fence — try bare ```
-          (let (bare-idx : i64 (index-of response-text "```"))
-            (if (= bare-idx -1)
-              response-text
-              (let (after-open : i64 (+ bare-idx 3))
-                (let (nl-idx : i64 (index-of (substring response-text after-open (length response-text)) "\n"))
-                  (if (= nl-idx -1)
+         (open-idx : i64 (index-of response-text fence-open))
+      (if (= open-idx -1)
+        ;; No language-specific fence — try bare ```
+        (let (bare-idx : i64 (index-of response-text "```"))
+          (if (= bare-idx -1)
+            response-text
+            (let (after-open : i64 (+ bare-idx 3))
+                 (nl-idx : i64 (index-of (substring response-text after-open (length response-text)) "\n"))
+              (if (= nl-idx -1)
+                response-text
+                (let (code-start : i64 (+ after-open (+ nl-idx 1)))
+                     (close-idx : i64 (index-of (substring response-text code-start (length response-text)) "```"))
+                  (if (= close-idx -1)
                     response-text
-                    (let (code-start : i64 (+ after-open (+ nl-idx 1)))
-                      (let (close-idx : i64 (index-of (substring response-text code-start (length response-text)) "```"))
-                        (if (= close-idx -1)
-                          response-text
-                          (trim (substring response-text code-start (+ code-start close-idx)))))))))))
-          ;; Found language-specific fence
-          (let (code-start : i64 (+ open-idx (length fence-open)))
-            (let (rest : String (substring response-text code-start (length response-text)))
-              (let (close-idx : i64 (index-of rest "```"))
-                (if (= close-idx -1)
-                  response-text
-                  (trim (substring response-text code-start (+ code-start close-idx)))))))))))
+                    (trim (substring response-text code-start (+ code-start close-idx)))))))))
+        ;; Found language-specific fence
+        (let (code-start : i64 (+ open-idx (length fence-open)))
+             (rest : String (substring response-text code-start (length response-text)))
+             (close-idx : i64 (index-of rest "```"))
+          (if (= close-idx -1)
+            response-text
+            (trim (substring response-text code-start (+ code-start close-idx))))))))
 
 ;; Extract token usage counts from Ollama response
 (defn get-token-counts
@@ -95,17 +113,13 @@
   :body
     (let (start-ms : i64 (time-now))
       (match (shell-exec "claude" ["-p" prompt "--output-format" "text" "--model" model])
-        (Ok exec-map)
-          (let (exit-code : i64 (map-get exec-map "exit-code"))
-               (stdout : String (map-get exec-map "stdout"))
-               (elapsed : i64 (- (time-now) start-ms))
-            (if (= exit-code 0)
-              (Ok (map-from
-                ["response" stdout
-                 "prompt_eval_count" 0
-                 "eval_count" 0
-                 "total_duration" elapsed]))
-              (Err (str "claude exited with code " (int-to-string exit-code) ": " (map-get exec-map "stderr")))))
+        (Ok stdout)
+          (let (elapsed : i64 (- (time-now) start-ms))
+            (Ok (map-from
+              ["response" stdout
+               "prompt_eval_count" 0
+               "eval_count" 0
+               "total_duration" elapsed])))
         (Err e) (Err (str "claude exec failed: " e)))))
 
 ;; ── Unified query dispatcher ──────────────────────────────────────

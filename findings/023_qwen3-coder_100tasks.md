@@ -1,6 +1,10 @@
-# AIRL_bench Report
+# AIRL_bench Findings
 
 **Model:** qwen3-coder
+**Guide included:** Yes (airl_llm_guide.md)
+**AIRL binary:** /mnt/b6d8b397-9fc1-42ac-a0da-8664a73d4ee9/AIRL/target/release/airl-driver
+**Mode:** interpreted
+**Tasks:** 100
 
 ## Results
 
@@ -109,15 +113,15 @@
 
 ## Summary
 
-- **AIRL correct:** 100 / 100
-- **Python correct:** 0 / 100
+- **AIRL correct:** 100 / 100 (100%)
+- **Python correct:** 0 / 100 (0%)
 - **Output matches:** 0 / 100
 
 ### Token Usage
 
 | | AIRL | Python |
 |---|------|--------|
-| Context (per task) | 18526 | 0 |
+| Context (avg per task) | 18526 | 0 |
 | Generation (total) | 15279 | 0 |
 | Prompt (total) | 1852677 | 0 |
 

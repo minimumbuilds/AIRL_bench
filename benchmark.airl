@@ -52,8 +52,9 @@
              "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
              "limit"    (parse-flag args "--limit"    "0")
              "only"     (parse-flag args "--only"     "")]))
-      (map-set (map-set base "airl-only" (has-flag args "--airl-only"))
-               "compiled" (has-flag args "--compiled"))))
+      (map-set (map-set (map-set base "airl-only" (has-flag args "--airl-only"))
+               "compiled" (has-flag args "--compiled"))
+               "python-only" (has-flag args "--python-only"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -257,16 +258,20 @@
          (output-dir : String (map-get config "output"))
          (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
          (airl-only : Bool (map-get-or config "airl-only" false))
+         (python-only : Bool (map-get-or config "python-only" false))
          (compiled : Bool (map-get-or config "compiled" false))
          (task-spec : String (read-file (str task-dir "/" task-file)))
       (do
         (print "  Processing:" task-file)
-        (let (airl-result : Map (process-language-result
-                (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
-                "airl" task-file output-dir airl-bin compiled))
+        (let (skip-result : Map (map-from ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
+                           "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
+             (airl-result : Map (if python-only
+                skip-result
+                (process-language-result
+                  (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
+                  "airl" task-file output-dir airl-bin compiled)))
              (py-result : Map (if airl-only
-                (map-from ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
-                           "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0])
+                skip-result
                 (process-language-result
                   (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
                   "python" task-file output-dir airl-bin false)))

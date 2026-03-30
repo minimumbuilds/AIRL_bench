@@ -28,7 +28,7 @@
          "\",\"stream\":false}"))
 
 ;; Send a prompt to Ollama and return the parsed response map
-;; Uses curl via shell-exec since http-request is a stub in v0.6.0 airl-rt
+;; Uses curl via shell-exec (alternatively, use AIReqL library for HTTP)
 (defn query-ollama
   :sig [(host : String) (model : String) (prompt : String) -> Result[Map, String]]
   :intent "POST a generate request to Ollama via curl and return the parsed JSON response"

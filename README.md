@@ -1,8 +1,8 @@
-# AIRL_bench v0.2.0
+# AIRL_bench
 
 An AI code generation benchmarking utility **written in AIRL itself**. Sends coding tasks to a local Ollama LLM, generates code in both Python and AIRL, executes each, tracks token usage, compares output, times execution, and produces a findings report.
 
-Supports interpreted execution via `airl run` and AOT-compiled native binaries via `airl compile`.
+All code is compiled to native binaries via `g3`.
 
 ## Quick Start
 

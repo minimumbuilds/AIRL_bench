@@ -1,5 +1,5 @@
 ;; runner.airl — Execute generated code and time it
-;; v0.6.0: shell-exec returns Result[String, String] where Ok wraps stdout
+;; v0.7.0: shell-exec returns Ok(Map{"stdout","stderr","exit-code"})
 
 ;; Run a Python script and return execution results with timing
 (defn run-python
@@ -12,10 +12,10 @@
          (exec-result : _ (shell-exec "python3" [filepath]))
          (elapsed : i64 (- (time-now) start))
       (match exec-result
-        (Ok stdout) (map-from
-          ["success"    true
-           "stdout"     stdout
-           "stderr"     ""
+        (Ok out-map) (map-from
+          ["success"    (= (map-get-or out-map "exit-code" 0) 0)
+           "stdout"     (map-get-or out-map "stdout" "")
+           "stderr"     (map-get-or out-map "stderr" "")
            "elapsed-ms" elapsed])
         (Err e) (map-from
           ["success"    false
@@ -34,10 +34,10 @@
          (exec-result : _ (shell-exec airl-bin ["run" filepath]))
          (elapsed : i64 (- (time-now) start))
       (match exec-result
-        (Ok stdout) (map-from
-          ["success"    true
-           "stdout"     stdout
-           "stderr"     ""
+        (Ok out-map) (map-from
+          ["success"    (= (map-get-or out-map "exit-code" 0) 0)
+           "stdout"     (map-get-or out-map "stdout" "")
+           "stderr"     (map-get-or out-map "stderr" "")
            "elapsed-ms" elapsed])
         (Err e) (map-from
           ["success"    false
@@ -56,9 +56,9 @@
          (compile-result : _ (shell-exec airl-bin ["compile" source-path "-o" output-path]))
          (elapsed : i64 (- (time-now) start))
       (match compile-result
-        (Ok _) (map-from
-          ["success"    true
-           "stderr"     ""
+        (Ok out-map) (map-from
+          ["success"    (= (map-get-or out-map "exit-code" 0) 0)
+           "stderr"     (map-get-or out-map "stderr" "")
            "elapsed-ms" elapsed])
         (Err e) (map-from
           ["success"    false
@@ -76,10 +76,10 @@
          (exec-result : _ (shell-exec binary-path []))
          (elapsed : i64 (- (time-now) start))
       (match exec-result
-        (Ok stdout) (map-from
-          ["success"    true
-           "stdout"     stdout
-           "stderr"     ""
+        (Ok out-map) (map-from
+          ["success"    (= (map-get-or out-map "exit-code" 0) 0)
+           "stdout"     (map-get-or out-map "stdout" "")
+           "stderr"     (map-get-or out-map "stderr" "")
            "elapsed-ms" elapsed])
         (Err e) (map-from
           ["success"    false
@@ -98,9 +98,9 @@
          (compile-result : _ (shell-exec "gcc" ["-std=c11" "-O2" "-o" output-path source-path "-lm"]))
          (elapsed : i64 (- (time-now) start))
       (match compile-result
-        (Ok _) (map-from
-          ["success"    true
-           "stderr"     ""
+        (Ok out-map) (map-from
+          ["success"    (= (map-get-or out-map "exit-code" 0) 0)
+           "stderr"     (map-get-or out-map "stderr" "")
            "elapsed-ms" elapsed])
         (Err e) (map-from
           ["success"    false

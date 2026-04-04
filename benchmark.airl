@@ -115,8 +115,8 @@
   :ensures [(>= result 1)]
   :body
     (match (shell-exec "ls" ["findings/"])
-      (Ok listing-raw)
-        (let (listing : String (trim listing-raw))
+      (Ok out-map)
+        (let (listing : String (trim (map-get-or out-map "stdout" "")))
           (if (= listing "")
             1
             (+ 1 (length (filter (fn [f] (ends-with f ".md")) (split listing "\n"))))))
@@ -141,8 +141,8 @@
   :requires [(valid task-dir)]
   :ensures [(valid result)]
   :body (match (shell-exec "ls" [task-dir])
-          (Ok listing-raw)
-            (let (raw : String (trim listing-raw))
+          (Ok out-map)
+            (let (raw : String (trim (map-get-or out-map "stdout" "")))
               (if (= raw "")
                 []
                 (filter (fn [f] (ends-with f ".md")) (split raw "\n"))))

@@ -41,10 +41,11 @@
       (do
         (write-file tmp-path req-body)
         (match (shell-exec "curl" ["-sf" "-X" "POST" url "-H" "Content-Type: application/json" "-d" (str "@" tmp-path)])
-          (Ok response-text)
-            (match (json-parse response-text)
-              (Ok parsed-map) (Ok parsed-map)
-              (Err parse-err) (Err (str "JSON parse error: " parse-err)))
+          (Ok out-map)
+            (let (response-text : String (map-get-or out-map "stdout" ""))
+              (match (json-parse response-text)
+                (Ok parsed-map) (Ok parsed-map)
+                (Err parse-err) (Err (str "JSON parse error: " parse-err))))
           (Err curl-err)
             (Err (str "HTTP error: " curl-err))))))
 
@@ -113,10 +114,10 @@
   :body
     (let (start-ms : i64 (time-now))
       (match (shell-exec "claude" ["-p" prompt "--output-format" "text" "--model" model])
-        (Ok stdout)
+        (Ok out-map)
           (let (elapsed : i64 (- (time-now) start-ms))
             (Ok (map-from
-              ["response" stdout
+              ["response" (map-get-or out-map "stdout" "")
                "prompt_eval_count" 0
                "eval_count" 0
                "total_duration" elapsed])))

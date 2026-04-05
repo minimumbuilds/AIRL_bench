@@ -1,5 +1,66 @@
 ;; runner.airl — Execute generated code and time it
-;; v0.7.0: shell-exec returns Ok(Map{"stdout","stderr","exit-code"})
+;; v0.8.0: multi-test-case support via ---TESTS--- section
+
+;; ── Multi-test-case parsing ───────────────────────────────────────
+
+;; Parse test cases from task content. Returns list of maps with "input" and "expected" keys.
+;; Lines after ---TESTS--- that contain " => " are parsed as test cases.
+;; Returns empty list if no ---TESTS--- section is found.
+(defn parse-test-cases
+  :sig [(task-content : String) -> List]
+  :intent "Extract test cases from ---TESTS--- section of a task file"
+  :requires [(valid task-content)]
+  :ensures [(valid result)]
+  :body
+    (let (parts : List (split task-content "---TESTS---"))
+      (if (< (length parts) 2)
+        []
+        (let (test-section : String (trim (at parts 1)))
+             (lines : List (filter (fn [l] (contains l " => ")) (split test-section "\n")))
+          (map (fn [line]
+                 (let (halves : List (split line " => "))
+                   (map-from ["input"    (trim (at halves 0))
+                              "expected" (trim (at halves 1))])))
+               lines)))))
+
+;; Check whether a single execution stdout matches a test case's expected output.
+(defn test-case-passes
+  :sig [(stdout : String) (expected : String) -> Bool]
+  :intent "Return true if the trimmed stdout equals the expected output"
+  :requires [(valid stdout) (valid expected)]
+  :ensures [(valid result)]
+  :body (= (trim stdout) (trim expected)))
+
+;; Run all test cases for a language and return aggregated result.
+;; exec-fn is called with a single-arg string for input injection; it returns a runner result Map.
+;; When test-cases is empty, falls back to a single no-arg execution (legacy behavior).
+(defn run-with-tests
+  :sig [(exec-fn : _) (test-cases : List) -> Map]
+  :intent "Execute a program once per test case; require ALL to pass; return combined result map"
+  :requires [(valid exec-fn) (valid test-cases)]
+  :ensures [(map-has result "success") (map-has result "stdout") (map-has result "elapsed-ms")]
+  :body
+    (if (= (length test-cases) 0)
+      ;; Legacy: single execution, no test case filtering
+      (exec-fn "")
+      ;; Multi-test: run each case; all must pass
+      (let (first-result : Map (exec-fn (map-get-or (at test-cases 0) "input" "")))
+           (results : List (map (fn [tc]
+                                  (let (r : Map (exec-fn (map-get-or tc "input" "")))
+                                    (map-set r "expected" (map-get-or tc "expected" ""))))
+                                test-cases))
+           (all-pass : Bool (all (fn [r]
+                                    (test-case-passes
+                                      (map-get-or r "stdout" "")
+                                      (map-get-or r "expected" "")))
+                                  results))
+           (total-elapsed : i64 (fold (fn [acc r] (+ acc (map-get-or r "elapsed-ms" 0))) 0 results))
+           (last-stdout : String (map-get-or (at results (- (length results) 1)) "stdout" ""))
+        (map-from
+          ["success"    all-pass
+           "stdout"     last-stdout
+           "elapsed-ms" total-elapsed
+           "stderr"     (map-get-or first-result "stderr" "")]))))
 
 ;; Run a Python script and return execution results with timing
 (defn run-python

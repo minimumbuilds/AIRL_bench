@@ -52,11 +52,13 @@
              "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
              "limit"    (parse-flag args "--limit"    "0")
              "only"     (parse-flag args "--only"     "")]))
-      (map-set (map-set (map-set (map-set base
+      (map-set (map-set (map-set (map-set (map-set (map-set base
                "airl-only" (has-flag args "--airl-only"))
                "compiled" (has-flag args "--compiled"))
                "python-only" (has-flag args "--python-only"))
-               "c-only" (has-flag args "--c-only"))))
+               "c-only" (has-flag args "--c-only"))
+               "no-compare" (has-flag args "--no-compare"))
+               "runs" (parse-flag args "--runs" "1"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -325,11 +327,18 @@
 
 (let (config : Map (parse-config (get-args)))
   (do
-    (print "AIRL_bench v0.2.0")
+    (print "AIRL_bench v0.3.0")
     (print "Model:" (map-get config "model"))
     (print "Backend:" (map-get-or config "backend" "ollama"))
     (print "Mode:" (if (map-get-or config "compiled" false) "compiled (AOT)" "interpreted"))
     (print "Tasks:" (map-get config "tasks"))
+    (print "Runs per task:" (map-get-or config "runs" "1"))
+    (if (and (map-get-or config "airl-only" false)
+             (not (map-get-or config "no-compare" false)))
+      (do
+        (print "WARNING: --airl-only set. Token comparisons will be invalid without a Python baseline.")
+        (print "         Add --no-compare to suppress this warning."))
+      nil)
     (print "")
     (if (check-backend config)
         (do

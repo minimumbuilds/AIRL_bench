@@ -107,6 +107,47 @@
   :ensures [(and (>= result 0) (<= result (length results)))]
   :body (fold (fn [acc r] (+ acc (if (= (map-get-or r "output-match" "—") "yes") 1 0))) 0 results))
 
+;; Format a ratio as N.NN× string (integer math: ratio * 100, then insert decimal)
+(defn format-ratio
+  :sig [(num : i64) (denom : i64) -> String]
+  :intent "Compute num/denom as a fixed-point ratio string like 1.23×, or — if denom is zero"
+  :requires [(>= num 0) (>= denom 0)]
+  :ensures [(valid result)]
+  :body
+    (if (= denom 0)
+      "—"
+      (let (scaled : i64 (/ (* num 100) denom))
+           (whole : i64 (/ scaled 100))
+           (frac : i64 (- scaled (* whole 100)))
+           (frac-str : String (if (< frac 10)
+                                (str "0" (int-to-string frac))
+                                (int-to-string frac)))
+        (str (int-to-string whole) "." frac-str "×"))))
+
+;; Generate token usage section
+(defn generate-token-section
+  :sig [(results : List) -> String]
+  :intent "Generate token usage breakdown separating completion tokens from prompt tokens"
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body
+    (let (total : i64 (length results))
+         (airl-comp-total : i64 (sum-field results "airl-completion-tok"))
+         (py-comp-total : i64 (sum-field results "py-completion-tok"))
+         (airl-prompt-total : i64 (sum-field results "airl-prompt-tok"))
+         (py-prompt-total : i64 (sum-field results "py-prompt-tok"))
+         (airl-comp-avg : i64 (if (= total 0) 0 (/ airl-comp-total total)))
+         (py-comp-avg : i64 (if (= total 0) 0 (/ py-comp-total total)))
+         (airl-prompt-avg : i64 (if (= total 0) 0 (/ airl-prompt-total total)))
+         (py-prompt-avg : i64 (if (= total 0) 0 (/ py-prompt-total total)))
+      (str "### Token Usage\n\n"
+           "| | AIRL | Python | Ratio |\n"
+           "|---|------|--------|-------|\n"
+           "| Completion tokens (total) | " (int-to-string airl-comp-total) " | " (int-to-string py-comp-total) " | " (format-ratio airl-comp-total py-comp-total) " |\n"
+           "| Completion tokens (avg/task) | " (int-to-string airl-comp-avg) " | " (int-to-string py-comp-avg) " | |\n"
+           "| Prompt tokens (avg/task) | " (int-to-string airl-prompt-avg) " | " (int-to-string py-prompt-avg) " | |\n"
+           "\n*Prompt tokens include the LLM guide (~13k for AIRL, ~500 for Python) — not comparable.*\n")))
+
 ;; Generate summary statistics
 (defn generate-summary
   :sig [(results : List) -> String]
@@ -119,8 +160,6 @@
          (py-pass : i64 (count-correct results "python-correct"))
          (c-pass : i64 (count-correct results "c-correct"))
          (show-c : Bool (> (sum-field results "c-completion-tok") 0))
-         (airl-gen-total : i64 (sum-field results "airl-completion-tok"))
-         (py-gen-total : i64 (sum-field results "py-completion-tok"))
          (c-gen-total : i64 (sum-field results "c-completion-tok"))
          (total-airl-ms : i64 (sum-field results "airl-time-ms"))
          (total-compile-ms : i64 (sum-field results "airl-compile-ms"))
@@ -133,11 +172,9 @@
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) "\n") "")
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
-           "\n### Token Usage\n\n"
-           "| | AIRL | Python |" (if show-c " C |" "") "\n"
-           "|---|------|--------|" (if show-c "---|" "") "\n"
-           "| Generation (total) | " (int-to-string airl-gen-total) " | " (int-to-string py-gen-total) " |"
-             (if show-c (str " " (int-to-string c-gen-total) " |") "") "\n"
+           "\n"
+           (generate-token-section results)
+           (if show-c (str "\n| C completion (total) | " (int-to-string c-gen-total) " |\n") "")
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")
@@ -176,6 +213,8 @@
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) " (" (int-to-string c-pct) "%)\n") "")
+           "\n"
+           (generate-token-section results)
            "\n### Execution\n\n"
            "- **Total AIRL execution time:** " (int-to-string total-airl-ms) " ms\n"
            (if (> total-compile-ms 0) (str "- **Total AIRL compile time:** " (int-to-string total-compile-ms) " ms\n") "")

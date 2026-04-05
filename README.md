@@ -1,8 +1,19 @@
 # AIRL_bench
 
-An AI code generation benchmarking utility **written in AIRL itself**. Sends coding tasks to a local Ollama LLM, generates code in both Python and AIRL, executes each, tracks token usage, compares output, times execution, and produces a findings report.
+An AI code generation benchmark written in AIRL itself. Sends coding tasks to a local Ollama LLM or Claude, generates code in both Python and AIRL, executes each, tracks token usage, compares output, times execution, and produces a findings report.
 
-All code is compiled to native binaries via `g3`.
+**Version:** 0.1.0 | Written in AIRL, compiled to native binaries via g3.
+
+## What It Does
+
+For each of 100 coding tasks (across 4 difficulty tiers), the tool:
+
+1. Sends the task to the LLM with AIRL and Python system prompts
+2. Extracts generated code from the response
+3. Runs the AIRL code via `airl run` (or compiles to a native binary with `--compiled`) and the Python code via `python3`
+4. Records: correctness (exit code 0), execution time, compile time (AOT mode), token usage, code size
+5. Compares stdout output between languages (semantic equivalence check)
+6. Saves per-run findings to `findings/NNN_modelname.md`
 
 ## Quick Start
 
@@ -16,17 +27,6 @@ All code is compiled to native binaries via `g3`.
 # AIRL only (skip Python generation)
 ./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --airl-only
 ```
-
-## What It Measures
-
-For each of 100 coding tasks (across 4 difficulty tiers), the tool:
-
-1. Sends the task to the LLM with AIRL and Python system prompts
-2. Extracts generated code from the response
-3. Runs the AIRL code via `airl run` (or compiles to native binary with `--compiled`) and the Python code via `python3`
-4. Records: correctness (exit code 0), execution time, compile time (AOT mode), token usage, code size
-5. Compares stdout output between languages (semantic equivalence check)
-6. Saves per-run findings to `findings/NNN_modelname.md`
 
 ## CLI Flags
 
@@ -61,11 +61,6 @@ For each of 100 coding tasks (across 4 difficulty tiers), the tool:
 
 # AOT compiled, AIRL only
 ./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --compiled --airl-only
-
-# Run only Tier 2 composition tasks (46-70)
-./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 4 --airl-only
-./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 5 --airl-only
-./run.sh --model qwen3-coder --airl-bin /path/to/airl-driver --only 6 --airl-only
 ```
 
 ## Task Tiers
@@ -118,20 +113,14 @@ The tool verifies before running:
 
 ### Key Findings
 
-- **Prompt engineering impact**: qwen3-coder went from 44% → 80% purely through better documentation (condensed ref → full guide + few-shot examples)
-- **AIRL-Header.md efficiency**: 84% accuracy at 56% fewer context tokens — a viable cost/accuracy tradeoff
+- **Prompt engineering impact**: qwen3-coder went from 44% → 80% purely through better documentation
+- **AIRL-Header.md efficiency**: 84% accuracy at 56% fewer context tokens
 - **v0.6.0 milestone**: qwen3-coder achieved 100%, matching Sonnet 4.6's score
 - **AIRL vs Python**: AIRL code is ~2.7x more token-efficient (126 vs 291 avg gen tokens) and executes ~25% faster in interpreted mode (738ms vs 981ms total)
 
 ## Dependencies
 
 - AIRL compiler v0.6.0+ (built with `--features aot` for compiled mode)
-- `curl` (for Ollama API calls — http-request is a stub in airl-rt v0.6.0)
+- `curl` (for Ollama API calls)
 - Ollama running locally with a coding model
 - Python 3 (for executing generated Python code)
-
-## Compatibility Notes
-
-- **v0.6.0 breaking changes**: `shell-exec` now returns `Result[String, String]` (was `Result[Map, String]`); `http-request` is a stub in airl-rt — this tool uses `curl` via `shell-exec` instead; `json-stringify` doesn't escape newlines — this tool uses manual JSON escaping
-- **Multi-binding let**: v0.6.0 strongly prefers `(let (a : T x) (b : T y) body)` over nested single-binding lets
-- **Mixed-type lists**: Avoid `(map-from ["key" bool-val])` — use `map-set` to add non-string values

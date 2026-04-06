@@ -20,7 +20,15 @@ if [[ -z "$AIRL_BIN" ]]; then
     exit 1
 fi
 
+# Derive stdlib path from airl-bin location (../../stdlib relative to target/release/airl-driver)
+AIRL_STDLIB="$(dirname "$(dirname "$(dirname "$AIRL_BIN")")")/stdlib"
+
+# Allow shell-exec to call the tools the benchmark needs
+export AIRL_ALLOW_EXEC="airl-driver,curl,python3,python,ls,mkdir"
+
 exec "$AIRL_BIN" run \
+  --load "$AIRL_STDLIB/prelude.airl" \
+  --load "$AIRL_STDLIB/json.airl" \
   --load "$SCRIPT_DIR/ollama.airl" \
   --load "$SCRIPT_DIR/runner.airl" \
   --load "$SCRIPT_DIR/report.airl" \

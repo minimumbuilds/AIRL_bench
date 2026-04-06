@@ -27,6 +27,29 @@
          "\",\"prompt\":\"" (json-escape prompt)
          "\",\"stream\":false}"))
 
+;; Remove "context":[...] from Ollama JSON before parsing to prevent OOM.
+;; Ollama embeds ~21k token IDs in the context array; json-parse would
+;; allocate each as a heap Value before we could drop them.
+(defn strip-ollama-context
+  :sig [(json-str : String) -> String]
+  :intent "Replace \"context\":[...] with \"context\":[] in raw JSON string"
+  :requires [(valid json-str)]
+  :ensures [(valid result)]
+  :body
+    (let (key : String "\"context\":[")
+      (let (start : i64 (index-of json-str key))
+        (if (= start -1)
+          json-str
+          (let (after-bracket : i64 (+ start (length key)))
+            (let (tail : String (substring json-str after-bracket (length json-str)))
+              (let (close-offset : i64 (index-of tail "]"))
+                (if (= close-offset -1)
+                  json-str
+                  (str (substring json-str 0 after-bracket)
+                       "]"
+                       (substring json-str (+ after-bracket (+ close-offset 1)) (length json-str)))))))))))
+
+
 ;; Send a prompt to Ollama and return the parsed response map
 ;; Uses curl via shell-exec (alternatively, use AIReqL library for HTTP)
 (defn query-ollama
@@ -42,10 +65,15 @@
         (write-file tmp-path req-body)
         (match (shell-exec "curl" ["-sf" "-X" "POST" url "-H" "Content-Type: application/json" "-d" (str "@" tmp-path)])
           (Ok out-map)
-            (let (response-text : String (map-get-or out-map "stdout" ""))
-              (match (json-parse response-text)
-                (Ok parsed-map) (Ok parsed-map)
-                (Err parse-err) (Err (str "JSON parse error: " parse-err))))
+            (let (raw-text : String (map-get-or out-map "stdout" ""))
+              (let (stripped : String (strip-ollama-context raw-text))
+                (let (parsed : _ (json-parse stripped))
+                  (if (valid parsed)
+                    (Ok (map-from
+                      ["response"          (map-get-or parsed "response" "")
+                       "prompt_eval_count" (map-get-or parsed "prompt_eval_count" 0)
+                       "eval_count"        (map-get-or parsed "eval_count" 0)]))
+                    (Err (str "JSON parse error: invalid or empty response"))))))
           (Err curl-err)
             (Err (str "HTTP error: " curl-err))))))
 

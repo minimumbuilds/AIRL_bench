@@ -1,8 +1,15 @@
-# AIRL Reference Guide
+# AIRL Reference Guide (v0.12.0)
 
 > A complete reference for writing AIRL (AI Intermediate Representation Language) programs.
 > AIRL is an S-expression language designed for AI systems, featuring mandatory contracts,
 > linear ownership, tensor operations, and multi-agent orchestration.
+>
+> **v0.12.0** adds: threading macros (`->` / `->>`), implicit partial application,
+> let destructuring (list and map patterns), and contract shorthand (`:pure`, `:pre`, `:post`, `:total`).
+>
+> **v0.11.0** introduced the stdlib migration: ~150 functions remain as compiler intrinsics
+> (always available), while 73 functions moved to the pure-AIRL standard library (auto-loaded
+> from `stdlib/`). New features: `extern-c` declarations and byte-array intrinsics.
 
 ---
 
@@ -146,7 +153,7 @@ Multi-binding `let` is the **preferred** style — multiple bindings in one `let
 
 - **`:sig`** — Parameter list and return type. Always required.
 - **`:body`** — The function body expression. Always required.
-- **At least one contract** — Either `:requires` or `:ensures` must be present (or both).
+- **At least one contract** — Either `:requires`, `:ensures`, or `:pure` must be present.
 
 ### Optional Fields
 
@@ -154,6 +161,43 @@ Multi-binding `let` is the **preferred** style — multiple bindings in one `let
 - **`:invariant`** — Checked after body evaluation, before `:ensures`.
 - **`:execute-on`** — `cpu`, `gpu`, `any`, or an agent name.
 - **`:priority`** — `critical`, `high`, `normal`, `low`.
+
+### Contract Shorthand
+
+For functions with standard "valid input → valid output" contracts, use `:pure` instead of writing boilerplate `:requires`/`:ensures`:
+
+```lisp
+;; Long form
+(defn double
+  :sig [(x : i64) -> i64]
+  :requires [(valid x)]
+  :ensures  [(valid result)]
+  :body (* x 2))
+
+;; Shorthand — identical semantics
+(defn double
+  :pure
+  :sig [(x : i64) -> i64]
+  :body (* x 2))
+```
+
+`:pure` generates `(valid <param>)` for every parameter and `(valid result)` for `:ensures`.
+
+Use `:pre` and `:post` as shorthand for `:requires` and `:ensures`:
+
+```lisp
+(defn clamp
+  :pure
+  :sig [(val : i64) (lo : i64) (hi : i64) -> i64]
+  :pre  [(<= lo hi)]
+  :post [(>= result lo) (<= result hi)]
+  :body (if (< val lo) lo (if (> val hi) hi val)))
+```
+
+`:total` implies `:pure` plus a termination hint to the verifier:
+
+```lisp
+(defn fibonacci :total :sig [(n : i64) -> i64] :body ...)
 
 ### Parameter Syntax
 
@@ -252,7 +296,43 @@ Bind one or more values, then evaluate a body expression:
 (let (x : i32 5) (y : i32 10) (+ x y))  ;; multiple bindings → 15
 ```
 
-Each binding has the form `(name : Type value)`. The type annotation is required.
+Each binding has the form `(name : Type value)`. The type annotation is optional.
+
+### Let Destructuring
+
+Destructure a list or map directly in a `let` binding:
+
+**List destructuring** — binds elements by position:
+```lisp
+(let ([a b c] [10 20 30])
+  (+ a b c))   ;; → 60
+
+;; Rest binding
+(let ([head & tail] my-list)
+  (print head))  ;; head = first element, tail = remainder
+```
+
+**Map destructuring** — binds keys as variable names:
+```lisp
+(let ({name age city} person-map)
+  (str name " is " (int-to-string age)))
+;; Equivalent to:
+;; (let (name (map-get person-map "name"))
+;;      (age  (map-get person-map "age"))
+;;      (city (map-get person-map "city")) ...)
+```
+
+Destructuring dramatically reduces boilerplate for tuple-like lists:
+```lisp
+;; Before
+(let (a (list-nth state 0)) (b (list-nth state 1))
+     (c (list-nth state 2)) (d (list-nth state 3))
+  ...)
+
+;; After
+(let ([a b c d] state)
+  ...)
+```
 
 ### Do Block
 
@@ -305,7 +385,11 @@ Unwrap an `(Ok val)` to `val`, or propagate `(Err ...)` as a runtime error:
 
 ---
 
-## 6. Builtin Functions
+## 6. Intrinsics (Always Available)
+
+As of v0.11.0, AIRL has ~150 **compiler intrinsics** — built into the runtime as `extern "C"` functions, always available without any imports. These include arithmetic, comparison, logic, type conversion, collections (core), string (core), float math, byte encoding, TCP, compression, regex, concurrency, and tensors.
+
+An additional 73 functions live in the **standard library** (`stdlib/`), written in pure AIRL and auto-loaded as a prelude. These include string helpers, JSON, base64, crypto (SHA-256, HMAC, PBKDF2), file I/O, directory I/O, system functions, paths, and extended map/set/collection operations. See sections 11–15 for stdlib documentation.
 
 ### Arithmetic
 
@@ -414,8 +498,8 @@ Use `char-code` / `char-from-code` for character↔integer conversion. Use `take
 |----------|-----------|-------------|
 | `int-to-string` | `(int-to-string n)` → Str | Convert integer to string |
 | `float-to-string` | `(float-to-string f)` → Str | Convert float to string |
-| `string-to-int` | `(string-to-int s)` → Result | Parse string as integer. Returns `(Ok int)` or `(Err message)` |
-| `string-to-float` | `(string-to-float s)` → Result | Parse string as float. Returns `(Ok float)` or `(Err message)` |
+| `string-to-int` | `(string-to-int s)` → Int | Parse string as integer (panics on invalid input) |
+| `string-to-float` | `(string-to-float s)` → Float | Parse string as float (panics on invalid input) |
 | `char-code` | `(char-code s)` → Int | First character's Unicode code point |
 | `char-from-code` | `(char-from-code n)` → Str | Unicode code point to single-character string |
 
@@ -448,22 +532,27 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `shell-exec` | `(shell-exec cmd args-list)` → Result[Map, String] | Execute command with args list. Ok map has `"stdout"`, `"stderr"`, `"exit-code"` keys |
+| `shell-exec` | `(shell-exec cmd)` → Str | Execute a shell command, return stdout |
 | `time-now` | `(time-now)` → Int | Current time as epoch milliseconds |
 | `sleep` | `(sleep ms)` → Nil | Pause execution for `ms` milliseconds |
 | `format-time` | `(format-time epoch-ms fmt)` → Str | Format epoch millis with strftime pattern |
 | `getenv` | `(getenv name)` → Str/Nil | Read environment variable |
 | `get-args` | `(get-args)` → List | Command-line arguments as list of strings |
 
-### Network/JSON
+### JSON (stdlib — auto-loaded from `stdlib/json.airl`)
+
+JSON functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `http-request` | `(http-request method url body headers)` → Result[Str, Str] | HTTP request. Args: method, url, body (string), headers (map). Method: `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, `"HEAD"` |
 | `json-parse` | `(json-parse str)` → any | Parse JSON string into AIRL value |
 | `json-stringify` | `(json-stringify val)` → Str | Serialize AIRL value to JSON string |
 
-### File I/O
+**HTTP:** Use the AIReqL library (`../AIReqL`). See the AIRL-Header.md for the AIReqL API.
+
+### File I/O (stdlib — auto-loaded from `stdlib/io.airl`)
+
+These functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -480,7 +569,9 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `file-size` | `(file-size path)` → Int | File size in bytes |
 | `is-dir?` | `(is-dir? path)` → Bool | Check if path is a directory |
 
-### Path (v0.3.0)
+### Path (stdlib — auto-loaded from `stdlib/path.airl`)
+
+Path functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. Auto-loaded in the prelude.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -499,15 +590,38 @@ All float math builtins operate on `f64` values. Integer arguments are promoted 
 | `regex-replace` | `(regex-replace pattern str replacement)` → Str | Replace all matches |
 | `regex-split` | `(regex-split pattern str)` → List | Split by pattern |
 
-### Crypto (v0.3.0)
+### Crypto (stdlib — auto-loaded from `stdlib/sha256.airl`, `stdlib/hmac.airl`, `stdlib/pbkdf2.airl`, `stdlib/base64.airl`)
+
+These functions were compiler builtins prior to v0.11.0 and are now implemented in pure AIRL. They are auto-loaded in the prelude — no imports needed.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sha256` | `(sha256 str)` → Str | SHA-256 hash (hex string) |
+| `sha512` | `(sha512 str)` → Str | SHA-512 hash (hex string) |
 | `hmac-sha256` | `(hmac-sha256 key message)` → Str | HMAC-SHA256 (hex string) |
+| `hmac-sha512` | `(hmac-sha512 key message)` → Str | HMAC-SHA512 (hex string) |
+| `sha256-bytes` | `(sha256-bytes buf)` → IntList | Raw 32-byte hash of IntList |
+| `sha512-bytes` | `(sha512-bytes buf)` → IntList | Raw 64-byte hash of IntList |
+| `hmac-sha256-bytes` | `(hmac-sha256-bytes key data)` → IntList | Raw HMAC of IntList inputs |
+| `hmac-sha512-bytes` | `(hmac-sha512-bytes key data)` → IntList | Raw HMAC of IntList inputs |
+| `pbkdf2-sha256` | `(pbkdf2-sha256 password salt iterations key-length)` → IntList | Key derivation |
+| `pbkdf2-sha512` | `(pbkdf2-sha512 password salt iterations key-length)` → IntList | Key derivation |
 | `base64-encode` | `(base64-encode str)` → Str | Base64 encode |
 | `base64-decode` | `(base64-decode str)` → Str | Base64 decode |
-| `random-bytes` | `(random-bytes n)` → List | List of n random byte values (0-255) |
+| `base64-encode-bytes` | `(base64-encode-bytes buf)` → Str | Encode IntList to base64 string |
+| `base64-decode-bytes` | `(base64-decode-bytes s)` → IntList | Decode base64 string to IntList |
+| `random-bytes` | `(random-bytes n)` → Str | Hex string of n random bytes (e.g., n=4 → `"a1b2c3d4"`, length 2n) — intrinsic |
+
+### Byte-Array Intrinsics (v0.11.0)
+
+Low-level byte-array operations for mutable, fixed-size byte buffers. These complement the IntList-based byte functions.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `bytes-alloc` | `(bytes-alloc n)` → ByteArray | Allocate a zero-filled byte array of size n |
+| `bytes-get` | `(bytes-get buf index)` → Int | Read byte at index (0-255) |
+| `bytes-set!` | `(bytes-set! buf index value)` → Nil | Write byte at index (mutates in place) |
+| `bytes-length` | `(bytes-length buf)` → Int | Length of byte array |
 
 ### Byte Encoding (v0.4.0)
 
@@ -524,6 +638,7 @@ Binary data is represented as `IntList` (list of integers 0-255). All integer en
 | `bytes-from-string` | `(bytes-from-string s)` → IntList | UTF-8 encode string to bytes |
 | `bytes-to-string` | `(bytes-to-string buf offset len)` → Str | UTF-8 decode bytes to string |
 | `bytes-concat` | `(bytes-concat a b)` → IntList | Concatenate two byte lists |
+| `bytes-concat-all` | `(bytes-concat-all parts)` → IntList | Concatenate List[IntList] in one O(n) pass |
 | `bytes-slice` | `(bytes-slice buf offset len)` → IntList | Extract slice with bounds check |
 | `crc32c` | `(crc32c buf)` → Int | CRC32C (Castagnoli) checksum |
 
@@ -533,8 +648,10 @@ Handle-based TCP networking. Connections are managed via integer handles. All op
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+| `tcp-listen` | `(tcp-listen port backlog)` → Result[Int, Str] | Bind + listen, returns server handle |
+| `tcp-accept` | `(tcp-accept handle)` → Result[Int, Str] | Blocking accept, returns connection handle |
 | `tcp-connect` | `(tcp-connect host port)` → Result[Int, Str] | Connect to host:port, returns handle |
-| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection |
+| `tcp-close` | `(tcp-close handle)` → Result[Nil, Str] | Close a connection or listener |
 | `tcp-send` | `(tcp-send handle data)` → Result[Int, Str] | Send byte list, returns bytes sent |
 | `tcp-recv` | `(tcp-recv handle max-bytes)` → Result[IntList, Str] | Receive up to max-bytes |
 | `tcp-recv-exact` | `(tcp-recv-exact handle n)` → Result[IntList, Str] | Receive exactly n bytes or error |
@@ -562,10 +679,13 @@ Thread-per-task model with message-passing channels. No shared mutable state.
 |----------|-----------|-------------|
 | `thread-spawn` | `(thread-spawn closure)` → Int | Spawn OS thread running 0-arg closure, returns handle |
 | `thread-join` | `(thread-join handle)` → Result | Block until done. Ok(value) or Err(error-msg) |
+| `thread-set-affinity` | `(thread-set-affinity core-id)` → Result | Pin calling thread to CPU core (Linux only) |
+| `cpu-count` | `(cpu-count)` → Int | Available parallelism (logical CPU count) |
 | `channel-new` | `(channel-new)` → [Int Int] | Create unbounded channel, returns [sender receiver] handles |
 | `channel-send` | `(channel-send tx value)` → Result | Send value. Err if channel closed |
 | `channel-recv` | `(channel-recv rx)` → Result | Blocking receive. Err if channel closed |
-| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. Err "timeout" or "channel closed" |
+| `channel-recv-timeout` | `(channel-recv-timeout rx ms)` → Result | Receive with timeout. ms=0 is non-blocking |
+| `channel-drain` | `(channel-drain rx)` → List | Drain all available messages without blocking |
 | `channel-close` | `(channel-close handle)` → Bool | Close sender or receiver endpoint |
 
 ```lisp
@@ -644,6 +764,28 @@ All tensors are f32 internally. Shapes are specified as bracket lists of integer
     (let (c : tensor (tensor.matmul a b))
       (print "sum =" (tensor.sum c)))))
 ```
+
+---
+
+## 6a. `extern-c` Declarations (v0.11.0)
+
+AIRL can call C functions directly using the `extern-c` syntax. This is how the stdlib implements functions that need low-level runtime support:
+
+```lisp
+(extern-c "c_function_name" [(param1 : Type1) (param2 : Type2) -> ReturnType])
+```
+
+The string is the C symbol name. The signature uses standard AIRL type syntax. Once declared, the function is callable like any other AIRL function:
+
+```lisp
+;; Declare a C function
+(extern-c "airl_read_file" [(path : String) -> String])
+
+;; Call it
+(airl_read_file "data.txt")
+```
+
+**When to use:** Stdlib modules use `extern-c` to access runtime primitives (file I/O, system calls, etc.) that cannot be implemented in pure AIRL. User code rarely needs `extern-c` directly — prefer stdlib functions.
 
 ---
 
@@ -939,7 +1081,11 @@ AIRL currently has no test runner, no `deftest` form, and no test discovery.
 
 ## 11. Standard Library (Collections)
 
-AIRL includes a standard library of 15 collection functions, written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — these are always available.
+AIRL's standard library is written in pure AIRL and auto-loaded as a prelude before user code. No imports needed — all stdlib functions are always available.
+
+As of v0.11.0, the stdlib has **13 modules** across `stdlib/`: `collections.airl`, `math.airl`, `result.airl`, `string.airl`, `map.airl`, `set.airl`, `json.airl`, `base64.airl`, `sha256.airl`, `hmac.airl`, `pbkdf2.airl`, `io.airl`, `path.airl`. The prelude (`stdlib/prelude.airl`) loads all modules automatically.
+
+The collections module provides 18 core list-processing functions:
 
 ### Core: map, filter, fold
 
@@ -1098,7 +1244,7 @@ Combinators for working with `Result` values (`(Ok v)` / `(Err e)`) without verb
 
 ## 14. Standard Library (String)
 
-String manipulation functions. 13 Rust builtins for character-level access, plus 10 pure AIRL helpers. Auto-loaded in the prelude.
+String manipulation functions. As of v0.11.0, all string functions (character access, search, transformation, split/join, and helpers) are implemented in pure AIRL in `stdlib/string.airl`. Auto-loaded in the prelude.
 
 ### Character Access
 
@@ -1221,6 +1367,30 @@ Lambda parameters do **not** need type annotations (unlike `defn` parameters).
 (apply-twice (fn [x] (* x 2)) 3)   ;; → 12
 ```
 
+### Partial Application
+
+Calling a function with **fewer arguments than its arity** returns a partial closure rather than erroring. Args are filled left to right:
+
+```lisp
+;; Named function used directly as a callback (eta-reduction)
+(map be32-to-list hash)             ;; be32-to-list takes 1 arg — works directly
+
+;; Partially applying a 2-arg function
+(let (get-name (map-get person-map))   ;; map-get takes 2 args
+  (get-name "name"))                   ;; supplies the second
+
+;; In pipelines
+(map (map-get m) (map-keys m))      ;; get all values from m
+
+;; Arithmetic
+(let (add5 (+ 5))
+  (map add5 [1 2 3]))               ;; → [6 7 8]
+```
+
+**Note:** Args fill left-to-right. `(> 0)` returns `fn[x] → (> 0 x)` which is `x < 0`, not `x > 0`. Design accordingly.
+
+Variable-arity functions (`str`, `concat`) cannot be partially applied.
+
 ### Closures
 
 Lambdas capture their enclosing scope:
@@ -1230,6 +1400,65 @@ Lambdas capture their enclosing scope:
   (let (add-offset : fn (fn [x] (+ x offset)))
     (add-offset 5)))  ;; → 15
 ```
+
+---
+
+## 16a. Threading Macros
+
+Threading macros reduce nesting depth for linear data pipelines. They are pure syntactic sugar — no runtime overhead.
+
+### `->` (thread-first)
+
+Inserts the accumulated value as the **first argument** of each step. Natural for object-style operations where the subject is the first param (`map-set`, `map-update`, etc.):
+
+```lisp
+;; Before
+(map-set (map-set (map-set base "a" x) "b" y) "c" z)
+
+;; After — reads in natural order
+(-> base
+    (map-set "a" x)
+    (map-set "b" y)
+    (map-set "c" z))
+
+;; Symbol step (no extra args) — inserts as sole argument
+(-> "  hello  " trim)   ;; → (trim "  hello  ")
+
+;; Mixed
+(-> value
+    (clamp 0 100)
+    int-to-string
+    (str "result: "))
+```
+
+### `->>` (thread-last)
+
+Inserts the accumulated value as the **last argument** of each step. Natural for collection pipelines where the collection is the last param (`map`, `filter`, `fold`):
+
+```lisp
+;; Before
+(fold + 0 (map (fn [x] (* x x)) (filter (fn [x] (> x 0)) xs)))
+
+;; After
+(->> xs
+     (filter (fn [x] (> x 0)))
+     (map (fn [x] (* x x)))
+     (fold + 0))
+
+;; With partial application
+(->> xs
+     (filter (< 0))       ;; (< 0 x) = x > 0
+     (map (* 2))
+     (fold + 0))
+```
+
+### When to use which
+
+| Use `->` | Use `->>` |
+|----------|-----------|
+| `map-set`, `map-update`, `map-merge` | `map`, `filter`, `fold` |
+| String builders | Collection transforms |
+| Object/record updates | Data pipelines |
 
 ---
 

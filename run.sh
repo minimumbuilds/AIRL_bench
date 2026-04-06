@@ -24,7 +24,7 @@ fi
 AIRL_STDLIB="$(dirname "$(dirname "$(dirname "$AIRL_BIN")")")/stdlib"
 
 # Allow shell-exec to call the tools the benchmark needs
-export AIRL_ALLOW_EXEC="airl-driver,curl,python3,python,ls,mkdir"
+export AIRL_ALLOW_EXEC="airl-driver,curl,python3,python,gcc,ls,mkdir"
 
 exec "$AIRL_BIN" run \
   --load "$AIRL_STDLIB/prelude.airl" \

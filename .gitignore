@@ -6,3 +6,6 @@ benchmark
 
 # Claude settings
 .claude/
+
+# training/ is intentionally tracked — persistent corpus across runs
+# (corpus.jsonl accumulates training examples; do not ignore)

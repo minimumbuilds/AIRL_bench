@@ -47,18 +47,19 @@
              "host"     (parse-flag args "--host"     "http://localhost:11434")
              "backend"  (parse-flag args "--backend"  "ollama")
              "tasks"    (parse-flag args "--tasks"    "./tasks")
+             "prompts"  (parse-flag args "--prompts"  "prompts/tasks.jsonl")
              "output"   (parse-flag args "--output"   "./output")
              "airl-bin" (parse-flag args "--airl-bin" "airl-driver")
              "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
              "limit"    (parse-flag args "--limit"    "0")
-             "only"     (parse-flag args "--only"     "")]))
-      (map-set (map-set (map-set (map-set (map-set (map-set base
-               "airl-only" (has-flag args "--airl-only"))
-               "compiled" (has-flag args "--compiled"))
-               "python-only" (has-flag args "--python-only"))
-               "c-only" (has-flag args "--c-only"))
-               "no-compare" (has-flag args "--no-compare"))
-               "runs" (parse-flag args "--runs" "1"))))
+             "only"     (parse-flag args "--only"     "")
+             "runs"     (parse-flag args "--runs"     "1")]))
+      (map-set (map-set (map-set (map-set (map-set base
+               "compiled"    (has-flag args "--compiled"))
+               "with-python" (has-flag args "--with-python"))
+               "with-c"      (has-flag args "--with-c"))
+               "no-compare"  (has-flag args "--no-compare"))
+               "use-tasks"   (has-flag args "--tasks"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -135,8 +136,23 @@
             (str "0" (int-to-string n))
             (int-to-string n))))
 
-;; ── Task file discovery ───────────────────────────────────────────
+;; ── Task loading ──────────────────────────────────────────────────
 
+;; Load tasks from a JSONL file (one JSON object per line).
+;; Each task map must have "id", "description", and "tests" fields.
+(defn load-tasks-jsonl
+  :sig [(path : String) -> List]
+  :intent "Parse a JSONL file into a list of task maps"
+  :requires [(not (= path ""))]
+  :ensures [(valid result)]
+  :body
+    (if (not (file-exists? path))
+      []
+      (let (raw : String (read-file path))
+           (lines : List (filter (fn [l] (not (= (trim l) ""))) (split raw "\n")))
+        (map (fn [line] (json-parse line)) lines))))
+
+;; Legacy: list .md task files from a directory (fallback for --tasks flag)
 (defn get-task-files
   :sig [(task-dir : String) -> List]
   :intent "List .md task files from the task directory"
@@ -150,20 +166,49 @@
                 (filter (fn [f] (ends-with f ".md")) (split raw "\n"))))
           (Err _) []))
 
+;; Convert a legacy task-file name + directory into a task map.
+;; Strips the leading numeric prefix: "01_safe_divide.md" → "safe_divide"
+;; Works for any prefix length: "100_variant_payload.md" → "variant_payload"
+(defn task-file-to-map
+  :sig [(task-dir : String) (task-file : String) -> Map]
+  :intent "Read a .md task file and return a task map with id, description, and tests"
+  :requires [(not (= task-file ""))]
+  :ensures [(map-has result "id") (map-has result "description")]
+  :body
+    (let (content : String (read-file (str task-dir "/" task-file)))
+         (no-ext : String (replace task-file ".md" ""))
+         (parts : List (split no-ext "_"))
+         (id : String (if (> (length parts) 1) (join (tail parts) "_") no-ext))
+      (if (contains content "---TESTS---")
+        (let (sections : List (split content "---TESTS---"))
+          (map-from
+            ["id"          id
+             "category"    "misc"
+             "description" (trim (at sections 0))
+             "tests"       (parse-test-cases content)]))
+        (map-from
+          ["id"          id
+           "category"    "misc"
+           "description" (trim content)
+           "tests"       []]))))
+
 ;; ── Task filtering ────────────────────────────────────────────────
 
 (defn filter-tasks
-  :sig [(task-files : List) (config : Map) -> List]
+  :sig [(tasks : List) (config : Map) -> List]
   :intent "Filter task list by --only pattern or --limit count"
-  :requires [(valid task-files)]
+  :requires [(valid tasks)]
   :ensures [(valid result)]
   :body
     (let (only : String (map-get-or config "only" ""))
          (limit-str : String (map-get-or config "limit" "0"))
       (let (filtered : List
               (if (= only "")
-                task-files
-                (filter (fn [f] (contains f only)) task-files)))
+                tasks
+                (filter (fn [t]
+                  (let (id : String (map-get-or t "id" ""))
+                    (contains id only)))
+                  tasks)))
         (match (string-to-int limit-str)
           (Ok n) (if (and (> n 0) (< n (length filtered)))
                    (take n filtered)
@@ -179,12 +224,13 @@
   :ensures [(valid result)]
   :body (if (file-exists? path) (read-file path) ""))
 
+;; Build the full AIRL generation prompt from header, guide, few-shot, and task spec.
 (defn build-airl-prompt
-  :sig [(system-prompt : String) (llm-guide : String) (few-shot : String) (task-spec : String) -> String]
-  :intent "Combine AIRL system prompt, LLM guide, few-shot examples, and task specification"
+  :sig [(airl-header : String) (llm-guide : String) (few-shot : String) (task-spec : String) -> String]
+  :intent "Combine AIRL header, LLM guide, few-shot examples, and task specification"
   :requires [(valid task-spec)]
   :ensures [(not (= result ""))]
-  :body (str system-prompt "\n\n" llm-guide "\n\n" few-shot "\n\nTASK:\n" task-spec))
+  :body (str airl-header "\n\n" llm-guide "\n\n" few-shot "\n\nTASK:\n" task-spec))
 
 (defn build-python-prompt
   :sig [(system-prompt : String) (task-spec : String) -> String]
@@ -200,7 +246,23 @@
   :ensures [(not (= result ""))]
   :body (str system-prompt "\n\nTASK:\n" task-spec))
 
-;; ── Output comparison ─────────────────────────────────────────────
+;; Build a task spec string that includes all test cases as expected outputs.
+;; LLMs should generate code that prints one result per test case, in order.
+(defn build-task-spec-with-tests
+  :sig [(description : String) (tests : List) -> String]
+  :intent "Append structured test cases to a task description for the LLM prompt"
+  :requires [(valid description)]
+  :ensures [(not (= result ""))]
+  :body
+    (if (= (length tests) 0)
+      description
+      (let (test-lines : List (map (fn [tc]
+              (str "  " (map-get-or tc "call" "") " => " (map-get-or tc "expected" "")))
+            tests))
+        (str description "\n\nExpected outputs (print one result per line, in this order):\n"
+             (join test-lines "\n")))))
+
+;; ── Output validation ─────────────────────────────────────────────
 
 (defn compare-outputs
   :sig [(airl-stdout : String) (python-stdout : String) -> String]
@@ -214,12 +276,60 @@
         "yes"
         "no")))
 
+;; Validate stdout against a list of test cases.
+;; Returns map with "passed" (Int), "total" (Int), "all-pass" (Bool).
+(defn validate-test-outputs
+  :sig [(stdout : String) (tests : List) -> Map]
+  :intent "Check each output line against the corresponding expected value"
+  :requires [(valid stdout) (valid tests)]
+  :ensures [(map-has result "passed") (map-has result "total") (map-has result "all-pass")]
+  :body
+    (if (= (length tests) 0)
+      (map-from ["passed" 0 "total" 0 "all-pass" true])
+      (let (out-lines : List (filter (fn [l] (not (= (trim l) ""))) (split (trim stdout) "\n")))
+           (n : i64 (min (length tests) (length out-lines)))
+           (pairs : List (map (fn [i]
+                                (let (expected : String (map-get-or (at tests i) "expected" ""))
+                                     (actual : String (if (< i (length out-lines)) (trim (at out-lines i)) ""))
+                                  (map-from ["expected" expected "actual" actual
+                                             "pass" (= actual expected)])))
+                              (range 0 n)))
+           (passed : i64 (length (filter (fn [p] (map-get-or p "pass" false)) pairs)))
+        (map-from
+          ["passed"   passed
+           "total"    (length tests)
+           "all-pass" (= passed (length tests))]))))
+
+;; ── Training data persistence ─────────────────────────────────────
+
+(defn save-training-example
+  :sig [(task : Map) (generated-code : String) (stdout : String) (validation : Map) (config : Map) -> Nil]
+  :intent "Append one training example to training/corpus.jsonl"
+  :requires [(map-has task "id")]
+  :ensures [true]
+  :body
+    (let (record : String (str
+           "{\"id\":\""            (json-escape (map-get-or task "id" ""))
+           "\",\"category\":\""    (json-escape (map-get-or task "category" ""))
+           "\",\"description\":\"" (json-escape (map-get-or task "description" ""))
+           "\",\"generated_code\":\"" (json-escape generated-code)
+           "\",\"stdout\":\""      (json-escape (trim stdout))
+           "\",\"tests_passed\":"  (int-to-string (map-get-or validation "passed" 0))
+           ",\"tests_total\":"     (int-to-string (map-get-or validation "total" 0))
+           ",\"all_pass\":"        (if (map-get-or validation "all-pass" false) "true" "false")
+           ",\"model\":\""         (json-escape (map-get-or config "model" ""))
+           "\",\"backend\":\""     (json-escape (map-get-or config "backend" "ollama"))
+           "\",\"mode\":\""        (json-escape (if (map-get-or config "compiled" false) "compiled" "interpreted"))
+           "\",\"timestamp_ms\":"  (int-to-string (time-now))
+           "}"))
+      (append-file "training/corpus.jsonl" (str record "\n"))))
+
 ;; ── Single task processing ────────────────────────────────────────
 
 (defn process-language-result
-  :sig [(response : _) (language : String) (task-file : String) (output-dir : String) (airl-bin : String) (compiled : Bool) -> Map]
+  :sig [(response : _) (language : String) (task-id : String) (tests : List) (output-dir : String) (airl-bin : String) (compiled : Bool) -> Map]
   :intent "Process an LLM response: extract code, write file, run (or compile+run), return result map"
-  :requires [(not (= task-file ""))]
+  :requires [(not (= task-id ""))]
   :ensures [(map-has result "correct") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
     (match response
@@ -228,26 +338,33 @@
              (code : String (strip-trailing-fence (extract-code response-text language)))
              (tokens : Map (get-token-counts resp-map))
              (ext : String (if (= language "airl") ".airl" (if (= language "c") ".c" ".py")))
-             (out-path : String (str output-dir "/" language "/" task-file ext))
+             (out-path : String (str output-dir "/" language "/" task-id ext))
           (do
             (write-file out-path code)
             (let (exec-result : Map
                     (if (= language "python")
                       (run-python out-path)
                       (if (= language "c")
-                        (let (bin-path : String (str output-dir "/bin/c_" task-file))
+                        (let (bin-path : String (str output-dir "/bin/c_" task-id))
                           (do
                             (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
                             (run-c-compiled out-path bin-path)))
                         (if compiled
-                          (let (bin-path : String (str output-dir "/bin/" task-file))
+                          (let (bin-path : String (str output-dir "/bin/" task-id))
                             (do
                               (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
                               (run-airl-compiled airl-bin out-path bin-path)))
                           (run-airl airl-bin out-path)))))
+                 (stdout : String (map-get-or exec-result "stdout" ""))
+                 (validation : Map (validate-test-outputs stdout tests))
               (map-from
-                ["correct"            (map-get-or exec-result "success" false)
-                 "stdout"             (map-get-or exec-result "stdout" "")
+                ["correct"            (if (> (length tests) 0)
+                                        (map-get-or validation "all-pass" false)
+                                        (map-get-or exec-result "success" false))
+                 "stdout"             stdout
+                 "code"               code
+                 "tests-passed"       (map-get-or validation "passed" 0)
+                 "tests-total"        (map-get-or validation "total" 0)
                  "elapsed-ms"         (map-get-or exec-result "elapsed-ms" 0)
                  "compile-ms"         (map-get-or exec-result "compile-ms" 0)
                  "prompt-tokens"      (map-get-or tokens "prompt_tokens" 0)
@@ -257,106 +374,126 @@
         (do
           (print "    Error:" e)
           (map-from
-            ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
+            ["correct" false "stdout" "" "code" ""
+             "tests-passed" 0 "tests-total" 0
+             "elapsed-ms" 0 "compile-ms" 0
              "prompt-tokens" 0 "completion-tokens" 0
              "code-chars" 0]))))
 
 (defn process-task
-  :sig [(config : Map) (airl-sys-prompt : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (c-sys-prompt : String) (task-file : String) -> Map]
-  :intent "Run one benchmark task: generate code in selected languages, execute, collect results"
-  :requires [(map-has config "model") (map-has config "tasks") (not (= task-file ""))]
+  :sig [(config : Map) (airl-header : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (c-sys-prompt : String) (task : Map) -> Map]
+  :intent "Run one benchmark task: generate AIRL code (and optionally Python/C), execute, validate, save training example"
+  :requires [(map-has config "model") (map-has task "id")]
   :ensures [(map-has result "task-name")]
   :body
-    (let (task-dir : String (map-get config "tasks"))
+    (let (task-id : String (map-get-or task "id" "unknown"))
+         (description : String (map-get-or task "description" ""))
+         (tests : List (map-get-or task "tests" []))
          (model : String (map-get config "model"))
          (host : String (map-get config "host"))
          (backend : String (map-get-or config "backend" "ollama"))
          (output-dir : String (map-get config "output"))
          (airl-bin : String (map-get-or config "airl-bin" "airl-driver"))
-         (airl-only : Bool (map-get-or config "airl-only" false))
-         (python-only : Bool (map-get-or config "python-only" false))
-         (c-only : Bool (map-get-or config "c-only" false))
+         (with-python : Bool (map-get-or config "with-python" false))
+         (with-c : Bool (map-get-or config "with-c" false))
          (compiled : Bool (map-get-or config "compiled" false))
-         (task-spec : String (read-file (str task-dir "/" task-file)))
+         (task-spec : String (build-task-spec-with-tests description tests))
       (do
-        (print "  Processing:" task-file)
-        (let (skip-result : Map (map-from ["correct" false "stdout" "" "elapsed-ms" 0 "compile-ms" 0
-                           "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
-             (run-airl-lang : Bool (not (or python-only c-only)))
-             (run-py : Bool (not (or airl-only c-only)))
-             (run-c : Bool (or c-only (not (or airl-only python-only))))
-             (airl-result : Map (if run-airl-lang
-                (process-language-result
-                  (query-llm backend host model (build-airl-prompt airl-sys-prompt airl-llm-guide airl-few-shot task-spec))
-                  "airl" task-file output-dir airl-bin compiled)
-                skip-result))
-             (py-result : Map (if run-py
-                (process-language-result
-                  (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
-                  "python" task-file output-dir airl-bin false)
-                skip-result))
-             (c-result : Map (if run-c
-                (process-language-result
-                  (query-llm backend host model (build-c-prompt c-sys-prompt task-spec))
-                  "c" task-file output-dir airl-bin false)
-                skip-result))
-          (map-from
-            ["task-name"           task-file
-             "airl-correct"        (map-get-or airl-result "correct" false)
-             "python-correct"      (map-get-or py-result "correct" false)
-             "c-correct"           (map-get-or c-result "correct" false)
-             "airl-prompt-tok"     (map-get-or airl-result "prompt-tokens" 0)
-             "airl-completion-tok" (map-get-or airl-result "completion-tokens" 0)
-             "py-prompt-tok"       (map-get-or py-result "prompt-tokens" 0)
-             "py-completion-tok"   (map-get-or py-result "completion-tokens" 0)
-             "c-prompt-tok"        (map-get-or c-result "prompt-tokens" 0)
-             "c-completion-tok"    (map-get-or c-result "completion-tokens" 0)
-             "airl-time-ms"        (map-get-or airl-result "elapsed-ms" 0)
-             "airl-compile-ms"     (map-get-or airl-result "compile-ms" 0)
-             "python-time-ms"      (map-get-or py-result "elapsed-ms" 0)
-             "c-time-ms"           (map-get-or c-result "elapsed-ms" 0)
-             "c-compile-ms"        (map-get-or c-result "compile-ms" 0)
-             "airl-chars"          (map-get-or airl-result "code-chars" 0)
-             "python-chars"        (map-get-or py-result "code-chars" 0)
-             "c-chars"             (map-get-or c-result "code-chars" 0)
-             "output-match"        (compare-outputs
-                                     (map-get-or airl-result "stdout" "")
-                                     (map-get-or py-result "stdout" ""))])))))
+        (print "  Processing:" task-id)
+        (let (skip-result : Map (map-from ["correct" false "stdout" "" "code" ""
+                                           "tests-passed" 0 "tests-total" 0
+                                           "elapsed-ms" 0 "compile-ms" 0
+                                           "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
+             (airl-result : Map
+               (process-language-result
+                 (query-llm backend host model (build-airl-prompt airl-header airl-llm-guide airl-few-shot task-spec))
+                 "airl" task-id tests output-dir airl-bin compiled))
+             (py-result : Map (if with-python
+               (process-language-result
+                 (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
+                 "python" task-id [] output-dir airl-bin false)
+               skip-result))
+             (c-result : Map (if with-c
+               (process-language-result
+                 (query-llm backend host model (build-c-prompt c-sys-prompt task-spec))
+                 "c" task-id [] output-dir airl-bin false)
+               skip-result))
+             (validation : Map (map-from
+               ["passed"   (map-get-or airl-result "tests-passed" 0)
+                "total"    (map-get-or airl-result "tests-total" 0)
+                "all-pass" (map-get-or airl-result "correct" false)]))
+          (do
+            (save-training-example task
+              (map-get-or airl-result "code" "")
+              (map-get-or airl-result "stdout" "")
+              validation
+              config)
+            (map-from
+              ["task-name"           task-id
+               "airl-correct"        (map-get-or airl-result "correct" false)
+               "python-correct"      (map-get-or py-result "correct" false)
+               "c-correct"           (map-get-or c-result "correct" false)
+               "airl-prompt-tok"     (map-get-or airl-result "prompt-tokens" 0)
+               "airl-completion-tok" (map-get-or airl-result "completion-tokens" 0)
+               "py-prompt-tok"       (map-get-or py-result "prompt-tokens" 0)
+               "py-completion-tok"   (map-get-or py-result "completion-tokens" 0)
+               "c-prompt-tok"        (map-get-or c-result "prompt-tokens" 0)
+               "c-completion-tok"    (map-get-or c-result "completion-tokens" 0)
+               "airl-time-ms"        (map-get-or airl-result "elapsed-ms" 0)
+               "airl-compile-ms"     (map-get-or airl-result "compile-ms" 0)
+               "python-time-ms"      (map-get-or py-result "elapsed-ms" 0)
+               "c-time-ms"           (map-get-or c-result "elapsed-ms" 0)
+               "c-compile-ms"        (map-get-or c-result "compile-ms" 0)
+               "airl-chars"          (map-get-or airl-result "code-chars" 0)
+               "python-chars"        (map-get-or py-result "code-chars" 0)
+               "c-chars"             (map-get-or c-result "code-chars" 0)
+               "tests-passed"        (map-get-or airl-result "tests-passed" 0)
+               "tests-total"         (map-get-or airl-result "tests-total" 0)
+               "output-match"        (compare-outputs
+                                       (map-get-or airl-result "stdout" "")
+                                       (map-get-or py-result "stdout" ""))]))))))
 
 ;; ── Main execution ────────────────────────────────────────────────
 
 (let (config : Map (parse-config (get-args)))
   (do
-    (print "AIRL_bench v0.3.0")
+    (print "AIRL_bench v0.4.0")
     (print "Model:" (map-get config "model"))
     (print "Backend:" (map-get-or config "backend" "ollama"))
     (print "Mode:" (if (map-get-or config "compiled" false) "compiled (AOT)" "interpreted"))
-    (print "Tasks:" (map-get config "tasks"))
+    (print "Languages: AIRL"
+           (if (map-get-or config "with-python" false) "+ Python" "")
+           (if (map-get-or config "with-c" false) "+ C" ""))
     (print "Runs per task:" (map-get-or config "runs" "1"))
-    (if (and (map-get-or config "airl-only" false)
-             (not (map-get-or config "no-compare" false)))
-      (do
-        (print "WARNING: --airl-only set. Token comparisons will be invalid without a Python baseline.")
-        (print "         Add --no-compare to suppress this warning."))
-      nil)
     (print "")
     (if (check-backend config)
         (do
           (let (output-dir : String (map-get config "output"))
             (do
               (shell-exec "mkdir" ["-p" (str output-dir "/airl") (str output-dir "/python") (str output-dir "/c")])
-              (shell-exec "mkdir" ["-p" "results" "findings"])
-              (let (airl-sys-prompt : String (load-system-prompt "prompts/airl_system.md"))
+              (shell-exec "mkdir" ["-p" "results" "findings" "training"])
+              (let (airl-header : String (load-system-prompt "prompts/airl_header.md"))
                    (airl-llm-guide : String (load-system-prompt (map-get-or config "guide" "prompts/airl_llm_guide.md")))
                    (airl-few-shot : String (load-system-prompt "prompts/airl_few_shot.md"))
                    (py-sys-prompt : String (load-system-prompt "prompts/python_system.md"))
                    (c-sys-prompt : String (load-system-prompt "prompts/c_system.md"))
-                   (all-tasks : List (get-task-files (map-get config "tasks")))
-                   (task-files : List (filter-tasks all-tasks config))
+                   ;; Load tasks: prefer JSONL unless --tasks flag was explicitly given
+                   (prompts-path : String (map-get-or config "prompts" "prompts/tasks.jsonl"))
+                   (use-tasks-dir : Bool (map-get-or config "use-tasks" false))
+                   (raw-tasks : List
+                     (if (and (not use-tasks-dir) (file-exists? prompts-path))
+                       (load-tasks-jsonl prompts-path)
+                       (map (fn [f] (task-file-to-map (map-get config "tasks") f))
+                            (get-task-files (map-get config "tasks")))))
+                   (all-tasks : List raw-tasks)
+                   (task-list : List (filter-tasks all-tasks config))
                 (do
-                  (print "Found" (int-to-string (length all-tasks)) "tasks, running" (int-to-string (length task-files)))
+                  (print "Tasks source:" (if (and (not use-tasks-dir) (file-exists? prompts-path))
+                                           prompts-path
+                                           (map-get config "tasks")))
+                  (print "Found" (int-to-string (length all-tasks)) "tasks, running" (int-to-string (length task-list)))
                   (print "")
-                  (let (results : List (map (fn [tf] (process-task config airl-sys-prompt airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt tf)) task-files))
+                  (let (results : List (map (fn [t] (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)) task-list))
                        (report : String (generate-report (map-get config "model") results))
                        (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
                        (run-id : String (pad-run-number (get-next-run-number)))
@@ -367,5 +504,6 @@
                       (print "")
                       (print "Benchmark complete.")
                       (print "Report written to results/benchmark_report.md")
-                      (print "Findings saved to" findings-path))))))))
+                      (print "Findings saved to" findings-path)
+                      (print "Training data appended to training/corpus.jsonl"))))))))
         (print "Aborting: pre-flight checks failed."))))

@@ -87,12 +87,14 @@ The tool verifies before running:
 ├── report.airl           # Markdown report and findings generation
 ├── run.sh                # Bash wrapper
 ├── prompts/
-│   ├── airl_system.md    # Condensed AIRL reference
+│   ├── airl_header.md    # AIRL reference header (synced from AIRL repo)
 │   ├── airl_llm_guide.md # Full AIRL LLM Guide (synced from AIRL repo)
-│   ├── airl_header.md    # Token-efficient AIRL reference header
 │   ├── airl_few_shot.md  # 6 worked examples
-│   └── python_system.md  # Python generation prompt
-├── tasks/                # 100 task specifications across 4 tiers (symlink to AIRL repo)
+│   ├── python_system.md  # Python generation prompt
+│   ├── c_system.md       # C generation prompt
+│   └── tasks.jsonl       # Central task definitions with I/O validation pairs
+├── tasks/                # Legacy .md task files (symlink to AIRL repo; fallback via --tasks)
+├── training/             # Persistent training corpus (corpus.jsonl, gittracked)
 ├── findings/             # Archived results from each benchmark run
 ├── results/              # Latest benchmark report
 └── output/               # Generated code + compiled binaries (gitignored)

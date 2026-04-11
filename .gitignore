@@ -9,3 +9,15 @@ benchmark
 
 # training/ is intentionally tracked — persistent corpus across runs
 # (corpus.jsonl accumulates training examples; do not ignore)
+
+# Local tool and personal config directories — never commit these
+.cargo/
+.claude/
+.rustup/
+.local/
+.npm/
+.node_modules/
+.venv/
+.env
+.envrc
+.direnv/

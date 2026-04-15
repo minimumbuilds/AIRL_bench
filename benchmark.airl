@@ -56,7 +56,7 @@
              "runs"     (parse-flag args "--runs"     "1")]))
       (map-set (map-set (map-set (map-set (map-set base
                "compiled"    (has-flag args "--compiled"))
-               "with-python" (has-flag args "--with-python"))
+               "with-python" (if (has-flag args "--airl-only") false true))
                "with-c"      (has-flag args "--with-c"))
                "no-compare"  (has-flag args "--no-compare"))
                "use-tasks"   (has-flag args "--tasks"))))

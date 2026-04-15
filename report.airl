@@ -295,11 +295,21 @@
          (matches : i64 (count-matches results))
          (has-multi-run : Bool (any (fn [r] (> (map-get-or r "runs-count" 1) 1)) results))
          (multi-run-n : i64 (if has-multi-run (map-get-or (at results 0) "runs-count" 1) 1))
+         (has-samples : Bool (any (fn [r] (> (map-get-or r "samples-count" 1) 1)) results))
+         (num-samples : i64 (if has-samples (map-get-or (at results 0) "samples-count" 1) 1))
+         (pass-at-1-count : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "pass-at-1" false) 1 0))) 0 results))
       (str "## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) "\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) "\n") "")
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
+           (if has-samples
+             (let (p1-pct : i64 (if (= total 0) 0 (/ (* pass-at-1-count 100) total)))
+                  (pk-pct : i64 (if (= total 0) 0 (/ (* airl-pass 100) total)))
+               (str "\n### Pass@K Analysis (K=" (int-to-string num-samples) ")\n\n"
+                    "- **Pass@1:** " (int-to-string pass-at-1-count) " / " (int-to-string total) " (" (int-to-string p1-pct) "%)\n"
+                    "- **Pass@K:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string pk-pct) "%)\n"))
+             "")
            (generate-error-breakdown results)
            (if has-multi-run
              (str "\n### Variance Analysis (" (int-to-string multi-run-n) " runs per task)\n\n"
@@ -358,12 +368,26 @@
                (str "**Runs per task:** " (int-to-string (map-get-or (at results 0) "runs-count" 1)) "\n")
                "")
              "")
+           (if (> (length results) 0)
+             (if (> (map-get-or (at results 0) "samples-count" 1) 1)
+               (str "**Samples per task:** " (int-to-string (map-get-or (at results 0) "samples-count" 1)) "\n")
+               "")
+             "")
            "\n## Results\n\n"
            (generate-results-table results)
            "\n## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) " (" (int-to-string c-pct) "%)\n") "")
+           ;; Pass@K section in findings when samples > 1
+           (let (has-s : Bool (if (> (length results) 0) (> (map-get-or (at results 0) "samples-count" 1) 1) false))
+             (if has-s
+               (let (ns : i64 (map-get-or (at results 0) "samples-count" 1))
+                    (p1-cnt : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "pass-at-1" false) 1 0))) 0 results))
+                    (p1-pct : i64 (if (= total 0) 0 (/ (* p1-cnt 100) total)))
+                 (str "- **Pass@1:** " (int-to-string p1-cnt) " / " (int-to-string total) " (" (int-to-string p1-pct) "%)\n"
+                      "- **Pass@" (int-to-string ns) ":** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"))
+               ""))
            (generate-error-breakdown results)
            "\n"
            (generate-token-section results)

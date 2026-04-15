@@ -54,7 +54,8 @@
              "limit"    (parse-flag args "--limit"    "0")
              "only"     (parse-flag args "--only"     "")
              "runs"     (parse-flag args "--runs"     "1")
-             "timeout"  (parse-flag args "--timeout"  "30")]))
+             "timeout"  (parse-flag args "--timeout"  "30")
+             "samples"  (parse-flag args "--samples"  "1")]))
       (map-set (map-set (map-set (map-set (map-set (map-set base
                "compiled"    (has-flag args "--compiled"))
                "with-python" (if (has-flag args "--airl-only") false true))
@@ -326,6 +327,43 @@
            "}"))
       (append-file "training/corpus.jsonl" (str record "\n"))))
 
+;; ── Pass@K sampling ───────────────────────────────────────────────
+
+(defn generate-airl-with-samples
+  :sig [(config : Map) (airl-prompt : String) (task-id : String) (tests : List) (output-dir : String) (airl-bin : String) (compiled : Bool) (timeout-secs : String) (num-samples : i64) -> Map]
+  :intent "Generate K independent AIRL samples; return first result augmented with pass@1/pass@k stats"
+  :requires [(> num-samples 0)]
+  :ensures [(map-has result "correct")]
+  :body
+    (let (backend : String (map-get-or config "backend" "ollama"))
+         (host : String (map-get config "host"))
+         (model : String (map-get config "model"))
+         (first-result : Map
+           (do
+             (if (> num-samples 1) (print "      Sample 1 of" (int-to-string num-samples)) nil)
+             (process-language-result
+               (query-llm backend host model airl-prompt)
+               "airl" task-id tests output-dir airl-bin compiled timeout-secs)))
+      (if (<= num-samples 1)
+        first-result
+        (let (extra-passed : i64
+                (fold (fn [acc i]
+                  (do
+                    (print "      Sample" (int-to-string (+ i 2)) "of" (int-to-string num-samples))
+                    (let (sr : Map (process-language-result
+                            (query-llm backend host model airl-prompt)
+                            "airl" (str task-id "_s" (int-to-string (+ i 1)))
+                            tests output-dir airl-bin compiled timeout-secs))
+                      (+ acc (if (map-get-or sr "correct" false) 1 0)))))
+                0 (range 0 (- num-samples 1))))
+             (first-passed : Bool (map-get-or first-result "correct" false))
+             (total-passed : i64 (+ (if first-passed 1 0) extra-passed))
+          (map-set (map-set (map-set (map-set first-result
+            "correct"        (> total-passed 0))
+            "pass-at-1"      first-passed)
+            "samples-count"  num-samples)
+            "samples-passed" total-passed)))))
+
 ;; ── Single task processing ────────────────────────────────────────
 
 (defn process-language-result
@@ -416,10 +454,10 @@
                                            "tests-passed" 0 "tests-total" 0
                                            "elapsed-ms" 0 "compile-ms" 0
                                            "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
+             (num-samples : i64 (match (string-to-int (map-get-or config "samples" "1")) (Ok n) (if (> n 1) n 1) (Err _) 1))
+             (airl-prompt : String (build-airl-prompt airl-header airl-llm-guide airl-few-shot task-spec))
              (airl-result : Map
-               (process-language-result
-                 (query-llm backend host model (build-airl-prompt airl-header airl-llm-guide airl-few-shot task-spec))
-                 "airl" task-id tests output-dir airl-bin compiled timeout-secs))
+               (generate-airl-with-samples config airl-prompt task-id tests output-dir airl-bin compiled timeout-secs num-samples))
              (py-result : Map (if with-python
                (process-language-result
                  (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
@@ -462,6 +500,9 @@
                "tests-passed"        (map-get-or airl-result "tests-passed" 0)
                "tests-total"         (map-get-or airl-result "tests-total" 0)
                "airl-error-category" (map-get-or airl-result "error-category" "")
+               "samples-count"       (map-get-or airl-result "samples-count" 1)
+               "samples-passed"      (map-get-or airl-result "samples-passed" 0)
+               "pass-at-1"           (map-get-or airl-result "pass-at-1" (map-get-or airl-result "correct" false))
                "output-match"        (compare-outputs
                                        (map-get-or airl-result "stdout" "")
                                        (map-get-or py-result "stdout" ""))]))))))
@@ -482,7 +523,9 @@
          (sum-py-ms : i64 (fold (fn [acc r] (+ acc (map-get-or r "python-time-ms" 0))) 0 run-results))
          (sum-c-ms : i64 (fold (fn [acc r] (+ acc (map-get-or r "c-time-ms" 0))) 0 run-results))
          (sum-tp : i64 (fold (fn [acc r] (+ acc (map-get-or r "tests-passed" 0))) 0 run-results))
-      (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set first
+         (p1-rp : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "pass-at-1" false) 1 0))) 0 run-results))
+         (sum-sp : i64 (fold (fn [acc r] (+ acc (map-get-or r "samples-passed" 0))) 0 run-results))
+      (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set first
         "runs-count"        num-runs)
         "airl-runs-passed"  airl-rp)
         "py-runs-passed"    py-rp)
@@ -493,7 +536,10 @@
         "airl-time-ms"      (/ sum-airl-ms num-runs))
         "python-time-ms"    (/ sum-py-ms num-runs))
         "c-time-ms"         (/ sum-c-ms num-runs))
-        "tests-passed"      (/ sum-tp num-runs))))
+        "tests-passed"      (/ sum-tp num-runs))
+        "pass-at-1"         (= p1-rp num-runs))
+        "pass-at-1-runs-passed" p1-rp)
+        "samples-passed"    (/ sum-sp num-runs))))
 
 ;; ── Task list runner ──────────────────────────────────────────────
 
@@ -527,6 +573,10 @@
            (if (map-get-or config "with-python" false) "+ Python" "")
            (if (map-get-or config "with-c" false) "+ C" ""))
     (print "Runs per task:" (map-get-or config "runs" "1"))
+    (let (samples-str : String (map-get-or config "samples" "1"))
+      (if (not (= samples-str "1"))
+        (print "Samples per task:" samples-str "(Pass@K enabled)")
+        nil))
     (print "Timeout:" (map-get-or config "timeout" "30") "seconds")
     (if (map-get-or config "ablation" false) (print "Ablation: ENABLED (4-cell matrix)") nil)
     (print "")

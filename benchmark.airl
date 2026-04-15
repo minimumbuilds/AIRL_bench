@@ -53,7 +53,8 @@
              "guide"    (parse-flag args "--guide"    "prompts/airl_llm_guide.md")
              "limit"    (parse-flag args "--limit"    "0")
              "only"     (parse-flag args "--only"     "")
-             "runs"     (parse-flag args "--runs"     "1")]))
+             "runs"     (parse-flag args "--runs"     "1")
+             "timeout"  (parse-flag args "--timeout"  "30")]))
       (map-set (map-set (map-set (map-set (map-set base
                "compiled"    (has-flag args "--compiled"))
                "with-python" (if (has-flag args "--airl-only") false true))
@@ -327,8 +328,8 @@
 ;; ── Single task processing ────────────────────────────────────────
 
 (defn process-language-result
-  :sig [(response : _) (language : String) (task-id : String) (tests : List) (output-dir : String) (airl-bin : String) (compiled : Bool) -> Map]
-  :intent "Process an LLM response: extract code, write file, run (or compile+run), return result map"
+  :sig [(response : _) (language : String) (task-id : String) (tests : List) (output-dir : String) (airl-bin : String) (compiled : Bool) (timeout-secs : String) -> Map]
+  :intent "Process an LLM response: extract code, write file, run (or compile+run) with timeout, return result map"
   :requires [(not (= task-id ""))]
   :ensures [(map-has result "correct") (map-has result "stdout") (map-has result "elapsed-ms")]
   :body
@@ -343,18 +344,18 @@
             (write-file out-path code)
             (let (exec-result : Map
                     (if (= language "python")
-                      (run-python out-path)
+                      (run-python out-path timeout-secs)
                       (if (= language "c")
                         (let (bin-path : String (str output-dir "/bin/c_" task-id))
                           (do
                             (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
-                            (run-c-compiled out-path bin-path)))
+                            (run-c-compiled out-path bin-path timeout-secs)))
                         (if compiled
                           (let (bin-path : String (str output-dir "/bin/" task-id))
                             (do
                               (shell-exec "mkdir" ["-p" (str output-dir "/bin")])
-                              (run-airl-compiled airl-bin out-path bin-path)))
-                          (run-airl airl-bin out-path)))))
+                              (run-airl-compiled airl-bin out-path bin-path timeout-secs)))
+                          (run-airl airl-bin out-path timeout-secs)))))
                  (stdout : String (map-get-or exec-result "stdout" ""))
                  (stderr : String (map-get-or exec-result "stderr" ""))
                  (exec-success : Bool (map-get-or exec-result "success" false))
@@ -362,7 +363,8 @@
                  (correct : Bool (if (> (length tests) 0)
                                    (map-get-or validation "all-pass" false)
                                    exec-success))
-                 (error-cat : String (classify-error stderr exec-success correct))
+                 (timed-out : Bool (map-get-or exec-result "timed-out" false))
+                 (error-cat : String (if timed-out "timeout" (classify-error stderr exec-success correct)))
               (map-from
                 ["correct"            correct
                  "stdout"             stdout
@@ -404,6 +406,7 @@
          (with-python : Bool (map-get-or config "with-python" false))
          (with-c : Bool (map-get-or config "with-c" false))
          (compiled : Bool (map-get-or config "compiled" false))
+         (timeout-secs : String (map-get-or config "timeout" "30"))
          (task-spec : String (build-task-spec-with-tests description tests))
       (do
         (print "  Processing:" task-id)
@@ -415,16 +418,16 @@
              (airl-result : Map
                (process-language-result
                  (query-llm backend host model (build-airl-prompt airl-header airl-llm-guide airl-few-shot task-spec))
-                 "airl" task-id tests output-dir airl-bin compiled))
+                 "airl" task-id tests output-dir airl-bin compiled timeout-secs))
              (py-result : Map (if with-python
                (process-language-result
                  (query-llm backend host model (build-python-prompt py-sys-prompt task-spec))
-                 "python" task-id [] output-dir airl-bin false)
+                 "python" task-id [] output-dir airl-bin false timeout-secs)
                skip-result))
              (c-result : Map (if with-c
                (process-language-result
                  (query-llm backend host model (build-c-prompt c-sys-prompt task-spec))
-                 "c" task-id [] output-dir airl-bin false)
+                 "c" task-id [] output-dir airl-bin false timeout-secs)
                skip-result))
              (validation : Map (map-from
                ["passed"   (map-get-or airl-result "tests-passed" 0)
@@ -503,6 +506,7 @@
            (if (map-get-or config "with-python" false) "+ Python" "")
            (if (map-get-or config "with-c" false) "+ C" ""))
     (print "Runs per task:" (map-get-or config "runs" "1"))
+    (print "Timeout:" (map-get-or config "timeout" "30") "seconds")
     (print "")
     (if (check-backend config)
         (do

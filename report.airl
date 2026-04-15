@@ -209,8 +209,9 @@
          (n-logic : i64 (count-error-category results "logic"))
          (n-own : i64 (count-error-category results "ownership"))
          (n-contract : i64 (count-error-category results "contract"))
+         (n-timeout : i64 (count-error-category results "timeout"))
          (n-unknown : i64 (count-error-category results "unknown"))
-         (total-failures : i64 (+ n-syntax (+ n-type (+ n-wf (+ n-cf (+ n-logic (+ n-own (+ n-contract n-unknown))))))))
+         (total-failures : i64 (+ n-syntax (+ n-type (+ n-wf (+ n-cf (+ n-logic (+ n-own (+ n-contract (+ n-timeout n-unknown)))))))))
       (if (= total-failures 0)
         ""
         (str "\n### Error Breakdown (" (int-to-string total-failures) " failures)\n\n"
@@ -221,6 +222,7 @@
              (if (> n-logic 0) (str "- **logic:** " (int-to-string n-logic) "\n") "")
              (if (> n-own 0) (str "- **ownership:** " (int-to-string n-own) "\n") "")
              (if (> n-contract 0) (str "- **contract:** " (int-to-string n-contract) "\n") "")
+             (if (> n-timeout 0) (str "- **timeout:** " (int-to-string n-timeout) "\n") "")
              (if (> n-unknown 0) (str "- **unknown:** " (int-to-string n-unknown) "\n") "")))))
 
 ;; Count output matches

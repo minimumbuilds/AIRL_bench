@@ -453,6 +453,35 @@
                                        (map-get-or airl-result "stdout" "")
                                        (map-get-or py-result "stdout" ""))]))))))
 
+;; ── Multi-run aggregation ─────────────────────────────────────────
+
+(defn aggregate-runs
+  :sig [(run-results : List) (num-runs : i64) -> Map]
+  :intent "Aggregate N run results into a single map with multi-run variance stats"
+  :requires [(> (length run-results) 0) (> num-runs 0)]
+  :ensures [(map-has result "task-name") (map-has result "runs-count")]
+  :body
+    (let (first : Map (at run-results 0))
+         (airl-rp : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "airl-correct" false) 1 0))) 0 run-results))
+         (py-rp : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "python-correct" false) 1 0))) 0 run-results))
+         (c-rp : i64 (fold (fn [acc r] (+ acc (if (map-get-or r "c-correct" false) 1 0))) 0 run-results))
+         (sum-airl-ms : i64 (fold (fn [acc r] (+ acc (map-get-or r "airl-time-ms" 0))) 0 run-results))
+         (sum-py-ms : i64 (fold (fn [acc r] (+ acc (map-get-or r "python-time-ms" 0))) 0 run-results))
+         (sum-c-ms : i64 (fold (fn [acc r] (+ acc (map-get-or r "c-time-ms" 0))) 0 run-results))
+         (sum-tp : i64 (fold (fn [acc r] (+ acc (map-get-or r "tests-passed" 0))) 0 run-results))
+      (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set (map-set first
+        "runs-count"        num-runs)
+        "airl-runs-passed"  airl-rp)
+        "py-runs-passed"    py-rp)
+        "c-runs-passed"     c-rp)
+        "airl-correct"      (= airl-rp num-runs))
+        "python-correct"    (= py-rp num-runs))
+        "c-correct"         (= c-rp num-runs))
+        "airl-time-ms"      (/ sum-airl-ms num-runs))
+        "python-time-ms"    (/ sum-py-ms num-runs))
+        "c-time-ms"         (/ sum-c-ms num-runs))
+        "tests-passed"      (/ sum-tp num-runs))))
+
 ;; ── Main execution ────────────────────────────────────────────────
 
 (let (config : Map (parse-config (get-args)))
@@ -493,7 +522,20 @@
                                            (map-get config "tasks")))
                   (print "Found" (int-to-string (length all-tasks)) "tasks, running" (int-to-string (length task-list)))
                   (print "")
-                  (let (results : List (map (fn [t] (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)) task-list))
+                  (let (num-runs : i64 (match (string-to-int (map-get-or config "runs" "1"))
+                                         (Ok n) (if (> n 0) n 1)
+                                         (Err _) 1))
+                       (results : List (map (fn [t]
+                         (if (= num-runs 1)
+                           (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)
+                           (aggregate-runs
+                             (map (fn [_i]
+                               (do
+                                 (print "    Run" (int-to-string (+ _i 1)) "of" (int-to-string num-runs))
+                                 (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)))
+                             (range 0 num-runs))
+                             num-runs)))
+                         task-list))
                        (report : String (generate-report (map-get config "model") results))
                        (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
                        (run-id : String (pad-run-number (get-next-run-number)))

@@ -8,6 +8,92 @@
   :ensures [(valid result)]
   :body (if b "PASS" "FAIL"))
 
+;; ── Multi-run variance helpers ──────────────────────────────────
+
+;; Integer square root via Newton's method (helper)
+(defn isqrt-step
+  :sig [(n : i64) (x : i64) -> i64]
+  :intent "Newton's method iteration for integer square root"
+  :requires [(> n 0) (> x 0)]
+  :ensures [(>= result 0)]
+  :body
+    (let (next-x : i64 (/ (+ x (/ n x)) 2))
+      (if (>= next-x x)
+        x
+        (isqrt-step n next-x))))
+
+;; Integer square root
+(defn isqrt
+  :sig [(n : i64) -> i64]
+  :intent "Compute floor(sqrt(n)) using integer arithmetic"
+  :requires [(>= n 0)]
+  :ensures [(>= result 0)]
+  :body
+    (if (<= n 1)
+      n
+      (isqrt-step n (/ n 2))))
+
+;; Format per-task pass column: "PASS" for single run, "2/3" for multi-run
+(defn format-run-pass
+  :sig [(r : Map) (correct-key : String) (runs-key : String) -> String]
+  :intent "Show PASS/FAIL or N/M run counts for multi-run results"
+  :requires [(valid r)]
+  :ensures [(valid result)]
+  :body
+    (let (runs-count : i64 (map-get-or r "runs-count" 1))
+      (if (<= runs-count 1)
+        (bool-str (map-get-or r correct-key false))
+        (let (runs-passed : i64 (map-get-or r runs-key 0))
+          (str (int-to-string runs-passed) "/" (int-to-string runs-count))))))
+
+;; Compute mean pass percentage across tasks for a given runs-key
+(defn compute-mean-pass-pct
+  :sig [(results : List) (runs-key : String) -> i64]
+  :intent "Average per-task pass percentage (0-100) across all tasks"
+  :requires [(valid results)]
+  :ensures [(>= result 0)]
+  :body
+    (let (n : i64 (length results))
+      (if (= n 0)
+        0
+        (let (sum-pct : i64 (fold (fn [acc r]
+                (let (runs : i64 (map-get-or r "runs-count" 1))
+                     (passed : i64 (map-get-or r runs-key 0))
+                  (+ acc (/ (* passed 100) runs))))
+              0 results))
+          (/ sum-pct n)))))
+
+;; Compute stddev of per-task pass percentages
+(defn compute-pass-stddev
+  :sig [(results : List) (runs-key : String) -> i64]
+  :intent "Standard deviation of per-task pass percentages (integer)"
+  :requires [(valid results)]
+  :ensures [(>= result 0)]
+  :body
+    (let (n : i64 (length results))
+      (if (<= n 1)
+        0
+        (let (mean-pct : i64 (compute-mean-pass-pct results runs-key))
+          (let (sum-sq : i64 (fold (fn [acc r]
+                  (let (runs : i64 (map-get-or r "runs-count" 1))
+                       (passed : i64 (map-get-or r runs-key 0))
+                    (let (pct : i64 (/ (* passed 100) runs))
+                         (diff : i64 (- pct mean-pct))
+                      (+ acc (* diff diff)))))
+                0 results))
+            (isqrt (/ sum-sq n)))))))
+
+;; Format "85% ± 12%" or "100%" when stddev is 0
+(defn format-pct-with-stddev
+  :sig [(mean-pct : i64) (stddev : i64) -> String]
+  :intent "Format percentage with optional standard deviation"
+  :requires [(>= mean-pct 0)]
+  :ensures [(valid result)]
+  :body
+    (if (= stddev 0)
+      (str (int-to-string mean-pct) "%")
+      (str (int-to-string mean-pct) "% ± " (int-to-string stddev) "%")))
+
 ;; Detect which languages have data in results
 (defn has-lang-data
   :sig [(results : List) (key : String) -> Bool]
@@ -27,9 +113,9 @@
     (let (compile-ms : i64 (map-get-or r "airl-compile-ms" 0))
          (c-compile-ms : i64 (map-get-or r "c-compile-ms" 0))
       (str "| " (map-get-or r "task-name" "?")
-           " | " (bool-str (map-get-or r "airl-correct" false))
-           " | " (bool-str (map-get-or r "python-correct" false))
-           (if show-c (str " | " (bool-str (map-get-or r "c-correct" false))) "")
+           " | " (format-run-pass r "airl-correct" "airl-runs-passed")
+           " | " (format-run-pass r "python-correct" "py-runs-passed")
+           (if show-c (str " | " (format-run-pass r "c-correct" "c-runs-passed")) "")
            " | " (int-to-string (map-get-or r "airl-completion-tok" 0))
            " | " (int-to-string (map-get-or r "py-completion-tok" 0))
            (if show-c (str " | " (int-to-string (map-get-or r "c-completion-tok" 0))) "")
@@ -167,11 +253,30 @@
          (total-c-ms : i64 (sum-field results "c-time-ms"))
          (total-c-compile : i64 (sum-field results "c-compile-ms"))
          (matches : i64 (count-matches results))
+         (has-multi-run : Bool (any (fn [r] (> (map-get-or r "runs-count" 1) 1)) results))
+         (multi-run-n : i64 (if has-multi-run (map-get-or (at results 0) "runs-count" 1) 1))
       (str "## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) "\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) "\n") "")
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
+           (if has-multi-run
+             (str "\n### Variance Analysis (" (int-to-string multi-run-n) " runs per task)\n\n"
+                  "- **AIRL mean pass rate:** "
+                  (format-pct-with-stddev
+                    (compute-mean-pass-pct results "airl-runs-passed")
+                    (compute-pass-stddev results "airl-runs-passed")) "\n"
+                  "- **Python mean pass rate:** "
+                  (format-pct-with-stddev
+                    (compute-mean-pass-pct results "py-runs-passed")
+                    (compute-pass-stddev results "py-runs-passed")) "\n"
+                  (if show-c
+                    (str "- **C mean pass rate:** "
+                         (format-pct-with-stddev
+                           (compute-mean-pass-pct results "c-runs-passed")
+                           (compute-pass-stddev results "c-runs-passed")) "\n")
+                    ""))
+             "")
            "\n"
            (generate-token-section results)
            (if show-c (str "\n| C completion (total) | " (int-to-string c-gen-total) " |\n") "")
@@ -206,8 +311,13 @@
            "**Guide included:** " (if guide-included "Yes (airl_llm_guide.md)" "No") "\n"
            "**AIRL binary:** " airl-bin "\n"
            "**Mode:** " (if (> total-compile-ms 0) "compiled (AOT)" "interpreted") "\n"
-           "**Tasks:** " (int-to-string total) "\n\n"
-           "## Results\n\n"
+           "**Tasks:** " (int-to-string total) "\n"
+           (if (> (length results) 0)
+             (if (> (map-get-or (at results 0) "runs-count" 1) 1)
+               (str "**Runs per task:** " (int-to-string (map-get-or (at results 0) "runs-count" 1)) "\n")
+               "")
+             "")
+           "\n## Results\n\n"
            (generate-results-table results)
            "\n## Summary\n\n"
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"

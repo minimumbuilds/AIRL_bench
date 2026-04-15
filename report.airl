@@ -112,6 +112,7 @@
   :body
     (let (compile-ms : i64 (map-get-or r "airl-compile-ms" 0))
          (c-compile-ms : i64 (map-get-or r "c-compile-ms" 0))
+         (error-cat : String (map-get-or r "airl-error-category" ""))
       (str "| " (map-get-or r "task-name" "?")
            " | " (format-run-pass r "airl-correct" "airl-runs-passed")
            " | " (format-run-pass r "python-correct" "py-runs-passed")
@@ -130,6 +131,7 @@
            " | " (int-to-string (map-get-or r "python-chars" 0))
            (if show-c (str " | " (int-to-string (map-get-or r "c-chars" 0))) "")
            " | " (map-get-or r "output-match" "—")
+           " | " (if (= error-cat "") "—" error-cat)
            " |\n")))
 
 ;; Generate markdown results table
@@ -153,7 +155,7 @@
                                 "")
                               " AIRL chars | Py chars |"
                               (if show-c " C chars |" "")
-                              " Match |\n"))
+                              " Match | Error |\n"))
          (separator : String (str "|------|------|--------|"
                                  (if show-c "---|" "")
                                  "----------|--------|"
@@ -165,7 +167,7 @@
                                    "")
                                  "------------|----------|"
                                  (if show-c "---------|" "")
-                                 "-------|\n"))
+                                 "-------|-------|\n"))
          (rows : String (fold (fn [acc r] (str acc (result-row r show-c))) "" results))
       (str header separator rows)))
 
@@ -184,6 +186,42 @@
   :requires [(valid results) (not (= key ""))]
   :ensures [(>= result 0)]
   :body (fold (fn [acc r] (+ acc (map-get-or r key 0))) 0 results))
+
+;; Count results with a specific AIRL error category
+(defn count-error-category
+  :sig [(results : List) (category : String) -> i64]
+  :intent "Count how many results have the given AIRL error category"
+  :requires [(valid results) (not (= category ""))]
+  :ensures [(>= result 0)]
+  :body (fold (fn [acc r] (+ acc (if (= (map-get-or r "airl-error-category" "") category) 1 0))) 0 results))
+
+;; Generate error breakdown section for failed tasks
+(defn generate-error-breakdown
+  :sig [(results : List) -> String]
+  :intent "Generate markdown error category breakdown for AIRL failures"
+  :requires [(valid results)]
+  :ensures [(valid result)]
+  :body
+    (let (n-syntax : i64 (count-error-category results "syntax"))
+         (n-type : i64 (count-error-category results "type"))
+         (n-wf : i64 (count-error-category results "wrong_function"))
+         (n-cf : i64 (count-error-category results "control_flow"))
+         (n-logic : i64 (count-error-category results "logic"))
+         (n-own : i64 (count-error-category results "ownership"))
+         (n-contract : i64 (count-error-category results "contract"))
+         (n-unknown : i64 (count-error-category results "unknown"))
+         (total-failures : i64 (+ n-syntax (+ n-type (+ n-wf (+ n-cf (+ n-logic (+ n-own (+ n-contract n-unknown))))))))
+      (if (= total-failures 0)
+        ""
+        (str "\n### Error Breakdown (" (int-to-string total-failures) " failures)\n\n"
+             (if (> n-syntax 0) (str "- **syntax:** " (int-to-string n-syntax) "\n") "")
+             (if (> n-type 0) (str "- **type:** " (int-to-string n-type) "\n") "")
+             (if (> n-wf 0) (str "- **wrong_function:** " (int-to-string n-wf) "\n") "")
+             (if (> n-cf 0) (str "- **control_flow:** " (int-to-string n-cf) "\n") "")
+             (if (> n-logic 0) (str "- **logic:** " (int-to-string n-logic) "\n") "")
+             (if (> n-own 0) (str "- **ownership:** " (int-to-string n-own) "\n") "")
+             (if (> n-contract 0) (str "- **contract:** " (int-to-string n-contract) "\n") "")
+             (if (> n-unknown 0) (str "- **unknown:** " (int-to-string n-unknown) "\n") "")))))
 
 ;; Count output matches
 (defn count-matches
@@ -260,6 +298,7 @@
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) "\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) "\n") "")
            "- **Output matches:** " (int-to-string matches) " / " (int-to-string total) "\n"
+           (generate-error-breakdown results)
            (if has-multi-run
              (str "\n### Variance Analysis (" (int-to-string multi-run-n) " runs per task)\n\n"
                   "- **AIRL mean pass rate:** "
@@ -323,6 +362,7 @@
            "- **AIRL correct:** " (int-to-string airl-pass) " / " (int-to-string total) " (" (int-to-string airl-pct) "%)\n"
            "- **Python correct:** " (int-to-string py-pass) " / " (int-to-string total) " (" (int-to-string py-pct) "%)\n"
            (if show-c (str "- **C correct:** " (int-to-string c-pass) " / " (int-to-string total) " (" (int-to-string c-pct) "%)\n") "")
+           (generate-error-breakdown results)
            "\n"
            (generate-token-section results)
            "\n### Execution\n\n"

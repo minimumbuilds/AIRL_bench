@@ -356,12 +356,18 @@
                               (run-airl-compiled airl-bin out-path bin-path)))
                           (run-airl airl-bin out-path)))))
                  (stdout : String (map-get-or exec-result "stdout" ""))
+                 (stderr : String (map-get-or exec-result "stderr" ""))
+                 (exec-success : Bool (map-get-or exec-result "success" false))
                  (validation : Map (validate-test-outputs stdout tests))
+                 (correct : Bool (if (> (length tests) 0)
+                                   (map-get-or validation "all-pass" false)
+                                   exec-success))
+                 (error-cat : String (classify-error stderr exec-success correct))
               (map-from
-                ["correct"            (if (> (length tests) 0)
-                                        (map-get-or validation "all-pass" false)
-                                        (map-get-or exec-result "success" false))
+                ["correct"            correct
                  "stdout"             stdout
+                 "stderr"             stderr
+                 "error-category"     error-cat
                  "code"               code
                  "tests-passed"       (map-get-or validation "passed" 0)
                  "tests-total"        (map-get-or validation "total" 0)
@@ -374,7 +380,8 @@
         (do
           (print "    Error:" e)
           (map-from
-            ["correct" false "stdout" "" "code" ""
+            ["correct" false "stdout" "" "stderr" "" "code" ""
+             "error-category" "unknown"
              "tests-passed" 0 "tests-total" 0
              "elapsed-ms" 0 "compile-ms" 0
              "prompt-tokens" 0 "completion-tokens" 0
@@ -400,7 +407,8 @@
          (task-spec : String (build-task-spec-with-tests description tests))
       (do
         (print "  Processing:" task-id)
-        (let (skip-result : Map (map-from ["correct" false "stdout" "" "code" ""
+        (let (skip-result : Map (map-from ["correct" false "stdout" "" "stderr" "" "code" ""
+                                           "error-category" ""
                                            "tests-passed" 0 "tests-total" 0
                                            "elapsed-ms" 0 "compile-ms" 0
                                            "prompt-tokens" 0 "completion-tokens" 0 "code-chars" 0]))
@@ -449,6 +457,7 @@
                "c-chars"             (map-get-or c-result "code-chars" 0)
                "tests-passed"        (map-get-or airl-result "tests-passed" 0)
                "tests-total"         (map-get-or airl-result "tests-total" 0)
+               "airl-error-category" (map-get-or airl-result "error-category" "")
                "output-match"        (compare-outputs
                                        (map-get-or airl-result "stdout" "")
                                        (map-get-or py-result "stdout" ""))]))))))

@@ -209,3 +209,49 @@
            "stderr"     (str "compile error: " (map-get compile-res "stderr"))
            "compile-ms" (map-get compile-res "elapsed-ms")
            "elapsed-ms" 0]))))
+
+;; ── Error classification ─────────────────────────────────────────
+
+;; Classify stderr output into an error category by pattern-matching
+(defn classify-stderr
+  :sig [(stderr : String) -> String]
+  :intent "Pattern-match stderr to determine error category"
+  :requires [(valid stderr)]
+  :ensures [(valid result)]
+  :body
+    (if (contains stderr "parse error") "syntax"
+      (if (contains stderr "unexpected token") "syntax"
+        (if (contains stderr "unbalanced") "syntax"
+          (if (contains stderr "type mismatch") "type"
+            (if (contains stderr "expected")
+              (if (contains stderr "got") "type"
+                (if (contains stderr "undefined") "wrong_function"
+                  (if (contains stderr "not found") "wrong_function"
+                    "unknown")))
+              (if (contains stderr "undefined") "wrong_function"
+                (if (contains stderr "not found") "wrong_function"
+                  (if (contains stderr "wrong number of arguments") "wrong_function"
+                    (if (contains stderr "arity") "wrong_function"
+                      (if (contains stderr "exhaustive") "control_flow"
+                        (if (contains stderr "unreachable") "control_flow"
+                          (if (contains stderr "linearity") "ownership"
+                            (if (contains stderr "moved") "ownership"
+                              (if (contains stderr "use after") "ownership"
+                                (if (contains stderr "contract") "contract"
+                                  (if (contains stderr "requires") "contract"
+                                    (if (contains stderr "ensures") "contract"
+                                      (if (contains stderr "assertion") "logic"
+                                        "unknown")))))))))))))))))))
+
+;; Classify an execution failure into an error category.
+;; Returns "" for passing tasks, a category string for failures.
+(defn classify-error
+  :sig [(stderr : String) (exec-success : Bool) (correct : Bool) -> String]
+  :intent "Return error category for failed tasks, empty string for passing tasks"
+  :requires [(valid stderr)]
+  :ensures [(valid result)]
+  :body
+    (if correct ""
+      (if (not exec-success)
+        (classify-stderr stderr)
+        "logic")))

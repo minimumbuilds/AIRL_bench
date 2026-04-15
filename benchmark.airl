@@ -55,12 +55,13 @@
              "only"     (parse-flag args "--only"     "")
              "runs"     (parse-flag args "--runs"     "1")
              "timeout"  (parse-flag args "--timeout"  "30")]))
-      (map-set (map-set (map-set (map-set (map-set base
+      (map-set (map-set (map-set (map-set (map-set (map-set base
                "compiled"    (has-flag args "--compiled"))
                "with-python" (if (has-flag args "--airl-only") false true))
                "with-c"      (has-flag args "--with-c"))
                "no-compare"  (has-flag args "--no-compare"))
-               "use-tasks"   (has-flag args "--tasks"))))
+               "use-tasks"   (has-flag args "--tasks"))
+               "ablation"    (has-flag args "--ablation"))))
 
 ;; ── Pre-flight checks ────────────────────────────────────────────
 
@@ -494,6 +495,26 @@
         "c-time-ms"         (/ sum-c-ms num-runs))
         "tests-passed"      (/ sum-tp num-runs))))
 
+;; ── Task list runner ──────────────────────────────────────────────
+
+(defn run-task-list
+  :sig [(config : Map) (airl-header : String) (airl-llm-guide : String) (airl-few-shot : String) (py-sys-prompt : String) (c-sys-prompt : String) (task-list : List) (num-runs : i64) -> List]
+  :intent "Run all tasks with given prompt configuration and return results list"
+  :requires [(valid config) (> num-runs 0)]
+  :ensures [(valid result)]
+  :body
+    (map (fn [t]
+      (if (= num-runs 1)
+        (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)
+        (aggregate-runs
+          (map (fn [_i]
+            (do
+              (print "    Run" (int-to-string (+ _i 1)) "of" (int-to-string num-runs))
+              (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)))
+          (range 0 num-runs))
+          num-runs)))
+      task-list))
+
 ;; ── Main execution ────────────────────────────────────────────────
 
 (let (config : Map (parse-config (get-args)))
@@ -507,6 +528,7 @@
            (if (map-get-or config "with-c" false) "+ C" ""))
     (print "Runs per task:" (map-get-or config "runs" "1"))
     (print "Timeout:" (map-get-or config "timeout" "30") "seconds")
+    (if (map-get-or config "ablation" false) (print "Ablation: ENABLED (4-cell matrix)") nil)
     (print "")
     (if (check-backend config)
         (do
@@ -538,27 +560,41 @@
                   (let (num-runs : i64 (match (string-to-int (map-get-or config "runs" "1"))
                                          (Ok n) (if (> n 0) n 1)
                                          (Err _) 1))
-                       (results : List (map (fn [t]
-                         (if (= num-runs 1)
-                           (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)
-                           (aggregate-runs
-                             (map (fn [_i]
-                               (do
-                                 (print "    Run" (int-to-string (+ _i 1)) "of" (int-to-string num-runs))
-                                 (process-task config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt t)))
-                             (range 0 num-runs))
-                             num-runs)))
-                         task-list))
-                       (report : String (generate-report (map-get config "model") results))
-                       (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
-                       (run-id : String (pad-run-number (get-next-run-number)))
-                       (findings-path : String (str "findings/" run-id "_" (map-get config "model") ".md"))
-                    (do
-                      (write-file "results/benchmark_report.md" report)
-                      (write-file findings-path findings)
-                      (print "")
-                      (print "Benchmark complete.")
-                      (print "Report written to results/benchmark_report.md")
-                      (print "Findings saved to" findings-path)
-                      (print "Training data appended to training/corpus.jsonl"))))))))
+                    (if (map-get-or config "ablation" false)
+                      ;; ── Ablation mode: run 4-cell matrix ──
+                      (do
+                        (print "\n=== Prompt Ablation Mode ===\n")
+                        (print "--- Cell 1/4: no-guide (no guide, no few-shot) ---")
+                        (let (r1 : List (run-task-list config airl-header "" "" py-sys-prompt c-sys-prompt task-list num-runs))
+                          (do
+                            (print "\n--- Cell 2/4: guide-only ---")
+                            (let (r2 : List (run-task-list config airl-header airl-llm-guide "" py-sys-prompt c-sys-prompt task-list num-runs))
+                              (do
+                                (print "\n--- Cell 3/4: few-shot-only ---")
+                                (let (r3 : List (run-task-list config airl-header "" airl-few-shot py-sys-prompt c-sys-prompt task-list num-runs))
+                                  (do
+                                    (print "\n--- Cell 4/4: full (guide + few-shot) ---")
+                                    (let (r4 : List (run-task-list config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt task-list num-runs))
+                                      (let (ablation-report : String (generate-ablation-findings (map-get config "model") num-runs r1 r2 r3 r4))
+                                           (run-id : String (pad-run-number (get-next-run-number)))
+                                        (let (findings-path : String (str "findings/" run-id "_" (map-get config "model") "_ablation.md"))
+                                          (do
+                                            (write-file findings-path ablation-report)
+                                            (print "")
+                                            (print "Ablation complete.")
+                                            (print "Report written to" findings-path))))))))))))
+                      ;; ── Normal mode ──
+                      (let (results : List (run-task-list config airl-header airl-llm-guide airl-few-shot py-sys-prompt c-sys-prompt task-list num-runs))
+                           (report : String (generate-report (map-get config "model") results))
+                           (findings : String (generate-findings (map-get config "model") results (not (= airl-llm-guide "")) (map-get-or config "airl-bin" "airl-driver")))
+                           (run-id : String (pad-run-number (get-next-run-number)))
+                           (findings-path : String (str "findings/" run-id "_" (map-get config "model") ".md"))
+                        (do
+                          (write-file "results/benchmark_report.md" report)
+                          (write-file findings-path findings)
+                          (print "")
+                          (print "Benchmark complete.")
+                          (print "Report written to results/benchmark_report.md")
+                          (print "Findings saved to" findings-path)
+                          (print "Training data appended to training/corpus.jsonl"))))))))))
         (print "Aborting: pre-flight checks failed."))))

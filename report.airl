@@ -388,3 +388,47 @@
          (generate-results-table results)
          "\n"
          (generate-summary results)))
+
+;; ── Ablation report generation ───────────────────────────────────
+
+(defn generate-ablation-findings
+  :sig [(model : String) (num-runs : i64) (r-none : List) (r-guide : List) (r-fewshot : List) (r-full : List) -> String]
+  :intent "Generate a prompt ablation findings report with contribution table"
+  :requires [(not (= model ""))]
+  :ensures [(not (= result ""))]
+  :body
+    (let (num-tasks : i64 (length r-none))
+      (let (pct-none : i64 (if (= num-tasks 0) 0 (/ (* (count-correct r-none "airl-correct") 100) num-tasks)))
+           (pct-guide : i64 (if (= num-tasks 0) 0 (/ (* (count-correct r-guide "airl-correct") 100) num-tasks)))
+           (pct-fewshot : i64 (if (= num-tasks 0) 0 (/ (* (count-correct r-fewshot "airl-correct") 100) num-tasks)))
+           (pct-full : i64 (if (= num-tasks 0) 0 (/ (* (count-correct r-full "airl-correct") 100) num-tasks)))
+        (let (guide-delta : i64 (- pct-guide pct-none))
+             (fewshot-delta : i64 (- pct-fewshot pct-none))
+             (full-delta : i64 (- pct-full pct-none))
+          (let (expected-sum : i64 (+ guide-delta fewshot-delta))
+            (let (interaction : i64 (- full-delta expected-sum))
+              (str "# AIRL_bench Prompt Ablation Report\n\n"
+                   "**Model:** " model "\n"
+                   "**Runs per cell:** " (int-to-string num-runs) "\n"
+                   "**Tasks:** " (int-to-string num-tasks) "\n\n"
+                   "## Contribution Table\n\n"
+                   "| Configuration | Pass Rate | Delta vs Baseline |\n"
+                   "|---|---|---|\n"
+                   "| no-guide (baseline) | " (int-to-string pct-none) "% | — |\n"
+                   "| guide-only | " (int-to-string pct-guide) "% | "
+                     (if (>= guide-delta 0) "+" "") (int-to-string guide-delta) "pp |\n"
+                   "| few-shot-only | " (int-to-string pct-fewshot) "% | "
+                     (if (>= fewshot-delta 0) "+" "") (int-to-string fewshot-delta) "pp |\n"
+                   "| full (guide + few-shot) | " (int-to-string pct-full) "% | "
+                     (if (>= full-delta 0) "+" "") (int-to-string full-delta) "pp |\n"
+                   "\n### Variable Contributions\n\n"
+                   "- **Guide alone:** " (if (>= guide-delta 0) "+" "") (int-to-string guide-delta) "pp over baseline\n"
+                   "- **Few-shot alone:** " (if (>= fewshot-delta 0) "+" "") (int-to-string fewshot-delta) "pp over baseline\n"
+                   "- **Combined:** " (if (>= full-delta 0) "+" "") (int-to-string full-delta) "pp over baseline\n"
+                   "- **Interaction effect:** " (if (>= interaction 0) "+" "") (int-to-string interaction)
+                     "pp (combined minus sum of individual effects)\n"
+                   "\n### Per-Cell Error Breakdowns\n"
+                   "\n#### no-guide\n" (generate-error-breakdown r-none)
+                   "\n#### guide-only\n" (generate-error-breakdown r-guide)
+                   "\n#### few-shot-only\n" (generate-error-breakdown r-fewshot)
+                   "\n#### full\n" (generate-error-breakdown r-full))))))))
